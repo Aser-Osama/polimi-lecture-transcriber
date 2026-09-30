@@ -99,6 +99,7 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
+            event_bus.close_all()
             await manager.stop()
             log.info("Application stopped")
 
@@ -148,13 +149,37 @@ def main() -> None:
             "from your network. This is not the default.",
             host,
         )
-    uvicorn.run(
-        "app.main:app",
+    # Pass the app object itself: with "app.main:app" uvicorn would re-import
+    # the module, creating a second instance whose state (event bus) is never
+    # populated when started via `python -m app.main`.
+    config = uvicorn.Config(
+        app,
         host=host,
         port=default_port(),
         log_level="info",
         access_log=False,
+        timeout_graceful_shutdown=5,
     )
+    server = uvicorn.Server(config)
+
+    # uvicorn waits for open connections before running lifespan shutdown, so an
+    # open SSE stream (the browser UI) would stall Ctrl+C. Close SSE streams as
+    # soon as a shutdown signal arrives.
+    original_handle_exit = server.handle_exit
+
+    def handle_exit(sig, frame) -> None:
+        log.info("Shutdown signal received (%s); closing live streams", sig)
+        bus = getattr(app.state, "event_bus", None)
+        loop = getattr(bus, "_loop", None) if bus is not None else None
+        if loop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(bus.close_all)
+            except RuntimeError:
+                pass
+        original_handle_exit(sig, frame)
+
+    server.handle_exit = handle_exit  # type: ignore[method-assign]
+    server.run()
 
 
 if __name__ == "__main__":

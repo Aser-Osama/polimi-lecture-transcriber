@@ -82,6 +82,7 @@ def worker_entry(paths_dict: dict, cmd_queue, event_queue, provider_options: dic
 
     reader = threading.Thread(target=command_reader, name="worker-commands", daemon=True)
     reader.start()
+    _start_parent_watchdog(stop)
     event_queue.put({"type": "ready", "pid": os.getpid()})
 
     while True:
@@ -123,6 +124,21 @@ def worker_entry(paths_dict: dict, cmd_queue, event_queue, provider_options: dic
 
     reader.join(timeout=1)
     event_queue.put({"type": "bye", "pid": os.getpid()})
+
+
+def _start_parent_watchdog(stop: threading.Event) -> None:
+    """Exit if the parent process disappears (e.g. SIGKILL), so a model-loaded
+    worker can never survive as an orphan."""
+
+    original_parent = os.getppid()
+
+    def watch() -> None:
+        while not stop.is_set():
+            if os.getppid() != original_parent:
+                os._exit(1)
+            stop.wait(1.0)
+
+    threading.Thread(target=watch, name="worker-parent-watchdog", daemon=True).start()
 
 
 def _execute_job(paths, job: Job, settings: AppSettings, token: CancellationToken, event_queue, options: dict) -> None:

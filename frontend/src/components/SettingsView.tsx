@@ -222,6 +222,16 @@ export function SettingsView({
             />
             Keep temporary copies of dropped files (needed for preview after processing)
           </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={draft.reveal_outputs_on_finish}
+              onChange={(event) =>
+                setDraft({ ...draft, reveal_outputs_on_finish: event.target.checked })
+              }
+            />
+            Reveal the output folder in Finder when a job finishes
+          </label>
         </div>
       </section>
 

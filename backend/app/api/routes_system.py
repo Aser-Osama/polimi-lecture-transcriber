@@ -56,11 +56,12 @@ async def events(request: Request) -> StreamingResponse:
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    yield _sse(event)
                 except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"
-        except asyncio.CancelledError:
-            raise
+                    continue
+                if event.get("type") == "shutdown":
+                    return
+                yield _sse(event)
         finally:
             bus.unsubscribe(queue)
 

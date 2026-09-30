@@ -38,11 +38,26 @@ SERVER_PID=$!
 cleanup() {
   say "Shutting down (pid $SERVER_PID)"
   kill -INT "$SERVER_PID" 2>/dev/null || true
-  for _ in $(seq 1 50); do
+  for _ in $(seq 1 20); do
     kill -0 "$SERVER_PID" 2>/dev/null || break
-    sleep 0.1
+    sleep 0.15
   done
-  kill -TERM "$SERVER_PID" 2>/dev/null || true
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    # A second SIGINT forces uvicorn to drop open connections (e.g. an SSE tab).
+    say "Still running; forcing shutdown"
+    kill -INT "$SERVER_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$SERVER_PID" 2>/dev/null || break
+      sleep 0.15
+    done
+  fi
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill -TERM "$SERVER_PID" 2>/dev/null || true
+    sleep 1
+  fi
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    kill -KILL "$SERVER_PID" 2>/dev/null || true
+  fi
   wait "$SERVER_PID" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT

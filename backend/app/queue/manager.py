@@ -36,7 +36,7 @@ from app.models.domain import (
 from app.queue.events import EventBus
 from app.queue.worker import worker_entry
 from app.services.settings_store import SettingsStore
-from app.utils.proc import kill_process_group
+from app.utils.proc import kill_process_group, open_in_finder
 
 log = logging.getLogger(__name__)
 
@@ -498,6 +498,21 @@ class JobManager:
         self._db.update_job(job)
         self._publish(job)
         log.info("Job %s -> %s", job.id, job.status.value)
+
+        if job.status == JobStatus.COMPLETED and self._settings.get().reveal_outputs_on_finish:
+            target = next(
+                (
+                    Path(path)
+                    for path in job.outputs.values()
+                    if path and Path(path).is_file()
+                ),
+                None,
+            )
+            if target is not None:
+                try:
+                    asyncio.get_running_loop().run_in_executor(None, open_in_finder, target)
+                except RuntimeError:  # no running loop (tests)
+                    pass
 
     def _cleanup_temp_source(self, job: Job) -> None:
         if not job.source_is_temporary:

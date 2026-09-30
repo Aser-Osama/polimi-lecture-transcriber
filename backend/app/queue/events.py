@@ -38,3 +38,13 @@ class EventBus:
         if loop is None or loop.is_closed():
             return
         loop.call_soon_threadsafe(self.publish, event)
+
+    def close_all(self) -> None:
+        """Tell every SSE stream to finish so shutdown never waits on them."""
+        log.info("Closing %d open event stream(s)", len(self._subscribers))
+        for queue in list(self._subscribers):
+            try:
+                queue.put_nowait({"type": "shutdown"})
+            except asyncio.QueueFull:
+                pass
+        self._subscribers.clear()
