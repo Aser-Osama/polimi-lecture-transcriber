@@ -11,6 +11,7 @@ from app.api.deps import ModelDownloadTracker, get_bus, get_download_tracker
 from app.core.errors import ModelDownloadError
 from app.providers.base import CancellationToken
 from app.services.model_cache import download_model, is_model_cached
+from app.services.openrouter_models import openrouter_model_choices
 from app.services.registry import MODEL_CATALOG, get_model_spec, model_choices
 
 log = logging.getLogger(__name__)
@@ -23,6 +24,11 @@ def _cached_state(key: str) -> dict:
         "cached": is_model_cached(spec.repo_id),
         "download": None,
     }
+
+
+@router.get("/openrouter")
+async def list_openrouter_models() -> dict:
+    return {"models": openrouter_model_choices()}
 
 
 @router.get("")

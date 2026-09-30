@@ -7,12 +7,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 INSTALL_FFMPEG=0
+WITH_WHISPERX=0
 for arg in "$@"; do
   case "$arg" in
     --install-ffmpeg) INSTALL_FFMPEG=1 ;;
+    --with-whisperx) WITH_WHISPERX=1 ;;
     -h|--help)
-      echo "Usage: ./setup.sh [--install-ffmpeg]"
+      echo "Usage: ./setup.sh [--install-ffmpeg] [--with-whisperx]"
       echo "  --install-ffmpeg  run 'brew install ffmpeg' automatically (asks nothing)"
+      echo "  --with-whisperx   also install optional WhisperX forced alignment (~1.5 GB,"
+      echo "                    isolated in .venv-whisperx; can also be installed later"
+      echo "                    from the app's Settings page)"
       exit 0
       ;;
   esac
@@ -119,6 +124,14 @@ print(f"  logs:    {paths.logs_dir}")
 print(f"  outputs: {paths.default_output_dir}")
 print(f"  temp:    {paths.temp_dir}")
 PY
+
+if [[ "$WITH_WHISPERX" == "1" ]]; then
+  say "Installing WhisperX forced alignment into .venv-whisperx (this can take a few minutes)"
+  (cd "$ROOT" && .venv/bin/python -c "
+from app.services.whisperx import install_whisperx
+install_whisperx(lambda message, fraction: print('  ' + message, flush=True))
+")
+fi
 
 say "Setup complete."
 echo

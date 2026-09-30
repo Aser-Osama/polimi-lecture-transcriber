@@ -52,12 +52,41 @@ export interface MediaInfo {
 
 export type LanguageChoice = "en" | "it" | "auto";
 
+export type ProviderName = "local_mlx" | "openrouter" | "fake";
+
 export interface JobConfig {
   model_key: string;
   language: LanguageChoice;
-  provider: string;
+  provider: ProviderName;
+  openrouter_model: string | null;
+  align_with_whisperx: boolean;
   glossary: string;
   options: Record<string, unknown>;
+}
+
+export interface OpenRouterModel {
+  id: string;
+  display_name: string;
+  description: string;
+  timestamps: "words" | "segments" | "none" | "unknown";
+  default: boolean;
+}
+
+export interface AlignmentInstallState {
+  state: "idle" | "installing" | "completed" | "failed";
+  message: string | null;
+  fraction?: number | null;
+}
+
+export interface AlignmentStatus {
+  installed: boolean;
+  venv_path: string;
+  venv_exists: boolean;
+  script_exists: boolean;
+  device: string | null;
+  version: string | null;
+  message: string;
+  install: AlignmentInstallState;
 }
 
 export interface Job {
@@ -79,6 +108,7 @@ export interface Job {
   error: string | null;
   outputs: Record<string, string>;
   timings: Record<string, number>;
+  provider_meta: Record<string, unknown>;
   archived: boolean;
 }
 
@@ -92,6 +122,9 @@ export interface AppSettings {
   output_dir: string | null;
   default_model_key: string;
   default_language: LanguageChoice;
+  default_provider: ProviderName;
+  default_openrouter_model: string;
+  default_align_with_whisperx: boolean;
   glossary: string;
   subtitles: SubtitlePreferences;
   keep_temp_uploads: boolean;

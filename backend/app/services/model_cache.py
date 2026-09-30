@@ -13,8 +13,10 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+import tqdm as tqdm_module
+
 from app.core.errors import CancelledError, ModelDownloadError
-from app.providers.base import CancellationToken
+from app.core.progress import CancellationToken
 
 log = logging.getLogger(__name__)
 
@@ -57,60 +59,37 @@ def is_model_cached(repo_id: str, cache_dir: Path | None = None) -> bool:
     return False
 
 
-class _ReportingTqdm:
-    """tqdm-compatible class hooked into huggingface_hub downloads.
+class _ReportingTqdm(tqdm_module.tqdm):  # type: ignore[misc]
+    """Real tqdm subclass hooked into huggingface_hub downloads.
 
-    Aggregates byte progress across all active per-file bars and reports an
-    honest overall fraction. Cancellation raises out of ``update`` which
-    aborts the download.
+    Subclassing keeps every method huggingface_hub may call. The bar is
+    silenced (disable=True) but still counts; byte progress across all active
+    per-file bars is aggregated into an honest overall fraction. Cancellation
+    raises out of ``update`` which aborts the download.
     """
 
     _lock = threading.Lock()
     _bars: dict[int, tuple[int, int, str]] = {}  # id -> (done, total, unit)
 
     def __init__(self, *args, **kwargs):
-        if args and args[0] is not None:
-            self.iterable = args[0]
+        self._report_unit = kwargs.get("unit", "it")
+        kwargs["disable"] = True
+        super().__init__(*args, **kwargs)
+        with type(self)._lock:
+            type(self)._bars[id(self)] = (0, int(self.total or 0), self._report_unit)
+
+    def update(self, n: int = 1):
+        if self.disable:
+            self.n += int(n)
         else:
-            self.iterable = kwargs.get("iterable")
-        self.total = int(kwargs.get("total") or 0)
-        self.unit = kwargs.get("unit", "it")
-        self.n = 0
-        self.desc = kwargs.get("desc") or ""
-
-    def __enter__(self):
-        with self._lock:
-            type(self)._bars[id(self)] = (0, self.total, self.unit)
-            type(self)._report()
-        return self
-
-    def __exit__(self, *exc):
-        with self._lock:
-            type(self)._bars[id(self)] = (self.total, self.total, self.unit)
-            type(self)._report()
-        return False
-
-    def update(self, n=1):
-        with self._lock:
-            done, total, unit = type(self)._bars.get(id(self), (0, self.total, self.unit))
+            super().update(n)
+        with type(self)._lock:
+            done, total, unit = type(self)._bars.get(
+                id(self), (int(self.n), int(self.total or 0), self._report_unit)
+            )
             type(self)._bars[id(self)] = (done + int(n), total, unit)
             type(self)._report()
         return True
-
-    def close(self):
-        pass
-
-    def set_description(self, *args, **kwargs):
-        pass
-
-    def set_postfix(self, *args, **kwargs):
-        pass
-
-    def refresh(self):
-        pass
-
-    def __iter__(self):
-        return iter(self.iterable if self.iterable is not None else [])
 
     @classmethod
     def _report(cls):

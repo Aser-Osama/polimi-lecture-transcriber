@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def utcnow() -> datetime:
@@ -81,7 +81,16 @@ class LanguageChoice(str, Enum):
 
 class ProviderName(str, Enum):
     LOCAL_MLX = "local_mlx"
+    OPENROUTER = "openrouter"
     FAKE = "fake"
+
+    @property
+    def display_name(self) -> str:
+        return {
+            ProviderName.LOCAL_MLX: "Local",
+            ProviderName.OPENROUTER: "OpenRouter",
+            ProviderName.FAKE: "Fake (development)",
+        }[self]
 
 
 class MediaStreamInfo(BaseModel):
@@ -116,6 +125,8 @@ class JobConfig(BaseModel):
     model_key: str = "quality"
     language: LanguageChoice = LanguageChoice.ENGLISH
     provider: ProviderName = ProviderName.LOCAL_MLX
+    openrouter_model: str | None = None
+    align_with_whisperx: bool = False
     glossary: str = ""
     options: dict[str, Any] = Field(default_factory=dict)
 
@@ -127,6 +138,23 @@ class JobConfig(BaseModel):
         if value not in MODEL_CATALOG:
             raise ValueError(f"unknown model key: {value}")
         return value
+
+    @field_validator("openrouter_model")
+    @classmethod
+    def _known_openrouter_model(cls, value: str | None) -> str | None:
+        from app.services.openrouter_models import is_known_openrouter_model
+
+        if value is not None and not is_known_openrouter_model(value):
+            raise ValueError(f"unknown OpenRouter model: {value}")
+        return value
+
+    @model_validator(mode="after")
+    def _openrouter_default(self) -> JobConfig:
+        from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL
+
+        if self.provider == ProviderName.OPENROUTER and not self.openrouter_model:
+            self.openrouter_model = DEFAULT_OPENROUTER_MODEL
+        return self
 
 
 class Job(BaseModel):
@@ -148,6 +176,7 @@ class Job(BaseModel):
     error: str | None = None
     outputs: dict[str, str] = Field(default_factory=dict)
     timings: dict[str, float] = Field(default_factory=dict)
+    provider_meta: dict[str, Any] = Field(default_factory=dict)
     archived: bool = False
 
     def public_view(self) -> dict[str, Any]:
@@ -164,6 +193,9 @@ class AppSettings(BaseModel):
     output_dir: str | None = None
     default_model_key: str = "quality"
     default_language: LanguageChoice = LanguageChoice.ENGLISH
+    default_provider: ProviderName = ProviderName.LOCAL_MLX
+    default_openrouter_model: str = "microsoft/mai-transcribe-2"
+    default_align_with_whisperx: bool = False
     glossary: str = ""
     subtitles: SubtitlePreferences = Field(default_factory=SubtitlePreferences)
     keep_temp_uploads: bool = False
@@ -176,4 +208,13 @@ class AppSettings(BaseModel):
 
         if value not in MODEL_CATALOG:
             raise ValueError(f"unknown model key: {value}")
+        return value
+
+    @field_validator("default_openrouter_model")
+    @classmethod
+    def _known_openrouter_model(cls, value: str) -> str:
+        from app.services.openrouter_models import is_known_openrouter_model
+
+        if not is_known_openrouter_model(value):
+            raise ValueError(f"unknown OpenRouter model: {value}")
         return value

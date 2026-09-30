@@ -10,9 +10,14 @@ Everything runs on your Mac. Nothing is uploaded anywhere.
 
 ## Features
 
-- Local transcription with **MLX Whisper** on Apple Silicon (no CUDA, no cloud)
-- **Word-level timestamps** (Whisper cross-attention + DTW) used to build subtitle cues —
-  never fabricated timings
+- Local transcription with **MLX Whisper** on Apple Silicon (no CUDA, no cloud) **or** an
+  optional **OpenRouter** cloud backend (5 STT models — mai-transcribe-2, Whisper large-v3 /
+  turbo, Qwen3-ASR) selectable per job in the UI
+- **Word-level timestamps** (Whisper cross-attention + DTW, or the remote model's own word
+  timings) used to build subtitle cues — never fabricated timings
+- Optional **WhisperX forced alignment** (local, Apple-silicon accelerated): re-times the
+  transcript of *any* backend against the original audio **without re-transcribing**; for
+  text-only remote models a quick local Whisper tiny anchor pass supplies real speech windows
 - Three quality tiers with real, verified Hugging Face models (downloaded on demand)
 - TXT, SRT, WebVTT and versioned JSON output per job; JSON retains raw Whisper segments,
   word timestamps and final cues so subtitles can be regenerated later
@@ -78,6 +83,46 @@ not pay the load time again. When no work has been queued for 60 seconds
 macOS — including MLX's Metal buffer cache and the model weights (~3 GB for Large V3). The
 next job simply starts a fresh worker and reloads the model from the cache in a few seconds.
 Transient MLX buffers are also released after every job.
+
+## OpenRouter backend (optional)
+
+Choose **OpenRouter** in the backend selector, pick a model and add your API key in
+Settings. The key is stored in the **macOS Keychain** (service `PolimiLectureTranscriber`) —
+never in the database, logs or the browser tab.
+
+| Model | Notes |
+| --- | --- |
+| `microsoft/mai-transcribe-2` | default; multilingual, word timestamps, $0.10/hour |
+| `openai/whisper-large-v3` | OpenAI Whisper large-v3 through OpenRouter providers |
+| `openai/whisper-large-v3-turbo` | faster Whisper variant |
+| `qwen/qwen3-asr-1.7b` | Qwen multilingual ASR, word timestamps |
+| `qwen/qwen3-asr-flash-2026-02-10` | fastest Qwen; may return text only (use alignment) |
+
+How it works: the prepared 16 kHz audio is split into ~5-minute chunks **at detected
+silences** (OpenRouter providers time out after ~60 s per request), each chunk is encoded to
+mono MP3 and sent as base64 JSON with `response_format=verbose_json` and word/segment
+granularities. Chunk progress, detected language, per-job cost (`usage.cost`) and the model id
+are recorded in the job and result JSON. Models that cannot return structured output are
+retried as plain text and flagged in the job warnings — enable WhisperX alignment to still
+get subtitles. Course vocabulary is local-only (OpenRouter ignores prompts).
+
+## WhisperX alignment (optional)
+
+Enable **“Improve subtitle alignment (WhisperX)”** per batch in the transcribe view. It runs
+[WhisperX](https://github.com/m-bain/whisperX) *forced alignment* locally (wav2vec2 CTC on MPS
+or CPU, ~50–100× realtime) and re-times the transcript against the audio — the text itself is
+never regenerated. Works with Local and OpenRouter backends, with native word timestamps or
+segment-only results. If a remote model returns no timing at all, a small local Whisper tiny
+pass creates speech-anchor windows first.
+
+WhisperX lives in an isolated environment (`.venv-whisperx`, ~1.5 GB, torch/transformers) so
+it never touches the app's dependencies. Install it either way:
+
+- **Settings → WhisperX alignment → Install** (recommended; live status in the UI), or
+- `./setup.sh --with-whisperx`.
+
+The first alignment for a language downloads its small wav2vec2 model automatically. Without
+alignment, the local and remote workflows behave exactly as before.
 
 ## Supported media
 
@@ -169,13 +214,19 @@ untouched. See `docs/vast-provider-plan.md`.
 | Logs (rotating, 5 × 5 MB) | `~/Library/Logs/Polimi Lecture Transcriber/app.log` |
 | Temporary media | `~/Library/Application Support/Polimi Lecture Transcriber/tmp/` |
 | Transcripts | `~/Documents/Polimi Transcripts/` |
-| Model cache | `~/.cache/huggingface/hub` |
+| Whisper model cache | `~/.cache/huggingface/hub` |
+| OpenRouter API key | macOS Keychain (`PolimiLectureTranscriber`) |
+| WhisperX environment | `.venv-whisperx/` in the project folder (optional) |
 
 ## Privacy
 
-**Processing is performed locally on this Mac. Your lecture is not uploaded anywhere.**
-No telemetry, no analytics, no silent remote services. The only network access is downloading
-open-source models from Hugging Face when you request them.
+**Local mode: processing is performed locally on this Mac; your lecture is not uploaded
+anywhere.** No telemetry, no analytics, no silent remote services. The only network access is
+downloading open-source models from Hugging Face and WhisperX alignment models when requested.
+
+If you explicitly select the **OpenRouter backend**, the prepared audio *is* uploaded to
+OpenRouter for transcription (that is the point of the feature) and billed per second. Nothing
+is uploaded unless you choose that backend, and no other data ever leaves the machine.
 
 ## Testing
 
@@ -211,7 +262,8 @@ The Vite dev server proxies `/api` to the backend, so no CORS configuration is n
 Useful environment variables: `PT_HOST` (default `127.0.0.1`), `PT_PORT` (default `8765`),
 `PT_DATA_DIR`, `PT_LOGS_DIR`, `PT_TEMP_DIR`, `PT_OUTPUT_DIR`, `PT_DB_PATH`, `PT_DEBUG=1`
 (keeps temporary audio for inspection), `PT_PROVIDER` / `PT_FAKE_DELAY` (development with the
-fake provider), `HF_HOME` (model cache override).
+fake provider), `HF_HOME` (model cache override), `PT_OPENROUTER_BASE_URL` (tests only),
+`PT_WHISPERX_VENV` (alternate alignment environment), `PT_KEYCHAIN_SERVICE` (tests only).
 
 ## Troubleshooting
 
@@ -225,6 +277,11 @@ fake provider), `HF_HOME` (model cache override).
 - **Memory stays high right after a job** — expected while the app is batching: the model stays
   warm for the next job. It is released automatically after 60 s without queued work; the next
   job reloads it from the local cache.
+- **OpenRouter job fails with 401** — the key was rejected; re-enter it in Settings.
+- **OpenRouter job has no subtitles** — the chosen model returned text only. Enable WhisperX
+  alignment (or pick a model with word timestamps) and re-run.
+- **WhisperX install fails** — check the log; usually a network hiccup during the pip install.
+  Press Install again (the installer is idempotent).
 - **Where are the details?** — `~/Library/Logs/Polimi Lecture Transcriber/app.log`
   (Settings → Reveal logs).
 

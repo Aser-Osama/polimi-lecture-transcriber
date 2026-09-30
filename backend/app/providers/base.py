@@ -8,15 +8,27 @@ interface and return the same internal models.
 from __future__ import annotations
 
 import asyncio
-import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from app.core.errors import CancelledError
+from app.core.progress import (  # noqa: F401 - re-exported for existing imports
+    CancellationToken,
+    ProgressCallback,
+    noop_progress,
+)
 from app.models.result import RawSegment
+
+__all__ = [
+    "CancellationToken",
+    "ProgressCallback",
+    "RawTranscription",
+    "TranscriptionProvider",
+    "TranscriptionRequest",
+    "noop_progress",
+]
 
 
 class RawTranscription(BaseModel):
@@ -24,6 +36,7 @@ class RawTranscription(BaseModel):
     language: str | None = None
     segments: list[RawSegment] = Field(default_factory=list)
     duration: float | None = None
+    meta: dict = Field(default_factory=dict)
 
 
 @dataclass
@@ -32,43 +45,8 @@ class TranscriptionRequest:
     model_repo: str
     language: str | None  # None means auto-detect
     initial_prompt: str | None = None
+    media_duration: float | None = None
     options: dict = field(default_factory=dict)
-
-
-class CancellationToken:
-    """Thread-safe cooperative cancellation flag."""
-
-    def __init__(self) -> None:
-        self._event = threading.Event()
-
-    def cancel(self) -> None:
-        self._event.set()
-
-    @property
-    def cancelled(self) -> bool:
-        return self._event.is_set()
-
-    def raise_if_cancelled(self) -> None:
-        if self.cancelled:
-            raise CancelledError("Cancelled by user")
-
-
-class ProgressCallback:
-    """Callable reporting a stage transition.
-
-    ``fraction`` is an optional honest sub-progress value in [0, 1] within the
-    stage (e.g. byte progress while downloading a model, processed-audio
-    fraction while transcribing). ``None`` means the stage is indeterminate.
-    """
-
-    def __call__(
-        self, stage: str, message: str | None = None, fraction: float | None = None
-    ) -> None:
-        raise NotImplementedError
-
-
-def noop_progress(stage: str, message: str | None = None, fraction: float | None = None) -> None:
-    pass
 
 
 class TranscriptionProvider(ABC):

@@ -59,6 +59,16 @@ class Database:
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version == 1:
+            conn.executescript(
+                f"""
+                BEGIN;
+                ALTER TABLE jobs ADD COLUMN provider_meta_json TEXT NOT NULL DEFAULT '{{}}';
+                PRAGMA user_version = {DB_SCHEMA_VERSION};
+                COMMIT;
+                """
+            )
+            version = DB_SCHEMA_VERSION
         if version == 0:
             conn.executescript(
                 f"""
@@ -82,6 +92,7 @@ class Database:
                     error TEXT,
                     outputs_json TEXT NOT NULL DEFAULT '{{}}',
                     timings_json TEXT NOT NULL DEFAULT '{{}}',
+                    provider_meta_json TEXT NOT NULL DEFAULT '{{}}',
                     archived INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_created
@@ -111,8 +122,9 @@ class Database:
                     id, source_path, source_filename, source_is_temporary, size_bytes,
                     media_json, config_json, status, status_message, created_at,
                     started_at, completed_at, processing_duration, realtime_factor,
-                    detected_language, error, outputs_json, timings_json, archived
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    detected_language, error, outputs_json, timings_json,
+                    provider_meta_json, archived
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 self._row_values(job),
             )
@@ -125,7 +137,8 @@ class Database:
                     source_path=?, source_filename=?, source_is_temporary=?, size_bytes=?,
                     media_json=?, config_json=?, status=?, status_message=?, created_at=?,
                     started_at=?, completed_at=?, processing_duration=?, realtime_factor=?,
-                    detected_language=?, error=?, outputs_json=?, timings_json=?, archived=?
+                    detected_language=?, error=?, outputs_json=?, timings_json=?,
+                    provider_meta_json=?, archived=?
                 WHERE id=?
                 """,
                 (*self._row_values(job)[1:], job.id),
@@ -151,10 +164,12 @@ class Database:
             job.error,
             json.dumps(job.outputs),
             json.dumps(job.timings),
+            json.dumps(job.provider_meta),
             1 if job.archived else 0,
         )
 
     def _row_to_job(self, row: sqlite3.Row) -> Job:
+        columns = set(row.keys())
         payload = {
             "id": row["id"],
             "source_path": row["source_path"],
@@ -174,6 +189,10 @@ class Database:
             "error": row["error"],
             "outputs": json.loads(row["outputs_json"] or "{}"),
             "timings": json.loads(row["timings_json"] or "{}"),
+            # sqlite3.Row supports keys() but not "in" for column names.
+            "provider_meta": json.loads(row["provider_meta_json"] or "{}")
+            if "provider_meta_json" in columns
+            else {},
             "archived": bool(row["archived"]),
         }
         return Job.model_validate(payload)

@@ -91,9 +91,19 @@ function JobRow({
   const [menuOpen, setMenuOpen] = useState(false);
   const isActive = ACTIVE_STATUSES.includes(job.status);
   const now = useNow(isActive);
-  const modelName =
+  const localModelName =
     models.find((model) => model.key === job.config.model_key)?.display_name ??
     job.config.model_key;
+  const modelName =
+    job.config.provider === "openrouter"
+      ? `OpenRouter · ${job.config.openrouter_model ?? ""}`
+      : localModelName;
+  const costUsd =
+    typeof job.provider_meta?.cost_usd === "number" ? job.provider_meta.cost_usd : null;
+  const alignmentProvider =
+    typeof job.provider_meta?.alignment_provider === "string"
+      ? job.provider_meta.alignment_provider
+      : null;
 
   const startedMs = job.started_at ? new Date(job.started_at).getTime() : null;
   const elapsedSeconds = isActive && startedMs ? (now - startedMs) / 1000 : null;
@@ -139,6 +149,8 @@ function JobRow({
           {job.status === "completed" && job.processing_duration && (
             <span>processing {formatDuration(job.processing_duration)}</span>
           )}
+          {costUsd !== null && costUsd > 0 && <span>${costUsd.toFixed(4)}</span>}
+          {alignmentProvider?.includes("whisperx") && <span>WhisperX aligned</span>}
           {elapsed && <span>{elapsed} elapsed</span>}
           {job.created_at && !job.started_at && (
             <span>added {formatDateTime(job.created_at)}</span>
@@ -233,26 +245,30 @@ function JobRow({
                     >
                       Open transcript (.txt)
                     </a>
-                    <a
-                      className="menu-item"
-                      role="menuitem"
-                      href={`/api/jobs/${job.id}/outputs/srt`}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      Open subtitles (.srt)
-                    </a>
-                    <a
-                      className="menu-item"
-                      role="menuitem"
-                      href={`/api/jobs/${job.id}/outputs/vtt`}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      Open subtitles (.vtt)
-                    </a>
+                    {job.outputs["srt"] && (
+                      <a
+                        className="menu-item"
+                        role="menuitem"
+                        href={`/api/jobs/${job.id}/outputs/srt`}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        Open subtitles (.srt)
+                      </a>
+                    )}
+                    {job.outputs["vtt"] && (
+                      <a
+                        className="menu-item"
+                        role="menuitem"
+                        href={`/api/jobs/${job.id}/outputs/vtt`}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        Open subtitles (.vtt)
+                      </a>
+                    )}
                     <a
                       className="menu-item"
                       role="menuitem"

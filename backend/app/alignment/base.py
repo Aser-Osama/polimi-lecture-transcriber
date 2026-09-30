@@ -28,6 +28,9 @@ class AlignmentResult:
 class AlignmentProvider(ABC):
     name: str = "abstract"
 
+    def is_available(self) -> bool:
+        return True
+
     @abstractmethod
     def align(
         self,

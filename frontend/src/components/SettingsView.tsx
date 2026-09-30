@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { formatBytes } from "../format";
+import type { AlignmentInstallEvent } from "../hooks/useJobs";
 import type {
+  AlignmentStatus,
   AppSettings,
   LanguageChoice,
   ModelDownloadState,
   ModelInfo,
+  OpenRouterModel,
 } from "../types";
 import { PrivacyNote } from "./PrivacyNote";
 
@@ -15,8 +18,14 @@ interface Props {
   resolvedOutputDir: string;
   models: ModelInfo[];
   modelDownloads: Record<string, ModelDownloadState>;
+  openrouterModels: OpenRouterModel[];
+  hasOpenRouterKey: boolean;
+  alignmentStatus: AlignmentStatus | null;
+  alignmentInstall: AlignmentInstallEvent | null;
   onSaved: (settings: AppSettings) => void;
   onModelsChanged: () => void;
+  onKeyChanged: () => void;
+  onAlignmentChanged: () => void;
   onToast: (message: string, kind?: "info" | "error") => void;
 }
 
@@ -26,12 +35,20 @@ export function SettingsView({
   resolvedOutputDir,
   models,
   modelDownloads,
+  openrouterModels,
+  hasOpenRouterKey,
+  alignmentStatus,
+  alignmentInstall,
   onSaved,
   onModelsChanged,
+  onKeyChanged,
+  onAlignmentChanged,
   onToast,
 }: Props) {
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [keyBusy, setKeyBusy] = useState(false);
 
   useEffect(() => {
     setDraft(settings);
@@ -101,9 +118,25 @@ export function SettingsView({
 
       <section className="panel" aria-label="Default transcription preferences">
         <h2 className="panel-title">Defaults</h2>
-        <div className="options-grid">
+        <div className="options-grid three">
           <div className="field">
-            <label htmlFor="default-model">Default model</label>
+            <label htmlFor="default-backend">Backend</label>
+            <select
+              id="default-backend"
+              value={draft.default_provider === "openrouter" ? "openrouter" : "local_mlx"}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  default_provider: event.target.value as AppSettings["default_provider"],
+                })
+              }
+            >
+              <option value="local_mlx">Local</option>
+              <option value="openrouter">OpenRouter</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="default-model">Local model</label>
             <select
               id="default-model"
               value={draft.default_model_key}
@@ -116,6 +149,24 @@ export function SettingsView({
               ))}
             </select>
           </div>
+          <div className="field">
+            <label htmlFor="default-openrouter-model">OpenRouter model</label>
+            <select
+              id="default-openrouter-model"
+              value={draft.default_openrouter_model}
+              onChange={(event) =>
+                setDraft({ ...draft, default_openrouter_model: event.target.value })
+              }
+            >
+              {openrouterModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.display_name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="options-grid">
           <div className="field">
             <label htmlFor="default-language">Default language</label>
             <select
@@ -130,6 +181,132 @@ export function SettingsView({
               <option value="auto">Auto Detect</option>
             </select>
           </div>
+          <div className="field checkbox-field">
+            <label>
+              <input
+                type="checkbox"
+                checked={draft.default_align_with_whisperx}
+                onChange={(event) =>
+                  setDraft({ ...draft, default_align_with_whisperx: event.target.checked })
+                }
+              />
+              Enable WhisperX alignment by default
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel" aria-label="OpenRouter">
+        <h2 className="panel-title">OpenRouter</h2>
+        <p className="field-hint">
+          Cloud transcription via OpenRouter. The key is stored in the macOS Keychain — it never
+          touches the app database, logs or this browser. Long lectures are split into
+          silence-aligned chunks because providers time out after ~60 s per request.
+        </p>
+        <div className="field">
+          <label htmlFor="openrouter-key">API key</label>
+          <div className="inline-field">
+            <input
+              id="openrouter-key"
+              type="password"
+              value={keyInput}
+              placeholder={hasOpenRouterKey ? "Key stored ✓ (enter a new one to replace)" : "sk-or-..."}
+              autoComplete="off"
+              onChange={(event) => setKeyInput(event.target.value)}
+            />
+            <button
+              type="button"
+              className="btn"
+              disabled={keyBusy || keyInput.trim().length === 0}
+              onClick={() => {
+                setKeyBusy(true);
+                api
+                  .storeOpenRouterKey(keyInput.trim())
+                  .then(() => {
+                    setKeyInput("");
+                    onKeyChanged();
+                    onToast("OpenRouter key stored in macOS Keychain.");
+                  })
+                  .catch((error: Error) => onToast(error.message, "error"))
+                  .finally(() => setKeyBusy(false));
+              }}
+            >
+              {keyBusy ? "Saving..." : "Save key"}
+            </button>
+            {hasOpenRouterKey && (
+              <button
+                type="button"
+                className="btn btn-danger-ghost"
+                onClick={() => {
+                  api
+                    .deleteOpenRouterKey()
+                    .then(() => {
+                      onKeyChanged();
+                      onToast("OpenRouter key removed.");
+                    })
+                    .catch((error: Error) => onToast(error.message, "error"));
+                }}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          <p className="field-hint">
+            {hasOpenRouterKey
+              ? "A key is stored in the login Keychain (service PolimiLectureTranscriber)."
+              : "No key stored yet."}
+          </p>
+        </div>
+      </section>
+
+      <section className="panel" aria-label="WhisperX alignment">
+        <div className="panel-header">
+          <h2 className="panel-title">WhisperX alignment</h2>
+          <span className={alignmentStatus?.installed ? "chip chip-ok" : "chip chip-muted"}>
+            {alignmentStatus === null
+              ? "Checking..."
+              : alignmentStatus.installed
+                ? `Installed (${alignmentStatus.device?.toUpperCase() ?? "CPU"})`
+                : "Not installed"}
+          </span>
+        </div>
+        <p className="field-hint">
+          Optional local forced alignment that re-times the transcript of any backend (Local or
+          OpenRouter) against the original audio without re-transcribing it. Installs into an
+          isolated environment (<code>{alignmentStatus?.venv_path ?? ".venv-whisperx"}</code>,
+          ~1.5 GB) and does not touch the app's dependencies. Models without any timestamps also
+          get a quick local Whisper tiny anchor pass so alignment can work.
+        </p>
+        {alignmentInstall?.state === "installing" && (
+          <p className="field-hint">
+            {alignmentInstall.message ?? "Installing..."}
+            {alignmentInstall.fraction ? ` ${Math.round(alignmentInstall.fraction * 100)}%` : ""}
+          </p>
+        )}
+        {alignmentInstall?.state === "failed" && (
+          <p className="model-error">{alignmentInstall.message}</p>
+        )}
+        <div className="button-row">
+          {!alignmentStatus?.installed && (
+            <button
+              type="button"
+              className="btn"
+              disabled={alignmentInstall?.state === "installing"}
+              onClick={() => {
+                api
+                  .installAlignment()
+                  .then(() => onToast("WhisperX installation started."))
+                  .catch((error: Error) => onToast(error.message, "error"));
+              }}
+            >
+              {alignmentInstall?.state === "installing" ? "Installing..." : "Install WhisperX alignment"}
+            </button>
+          )}
+          {alignmentStatus?.installed && (
+            <button type="button" className="btn" onClick={() => onAlignmentChanged()}>
+              Re-check status
+            </button>
+          )}
         </div>
       </section>
 

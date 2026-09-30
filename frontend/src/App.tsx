@@ -10,12 +10,15 @@ import { SelectedFiles } from "./components/SelectedFiles";
 import { SettingsView } from "./components/SettingsView";
 import { TopBar } from "./components/TopBar";
 import { useJobs } from "./hooks/useJobs";
+import type { BackendChoice } from "./components/OptionsBar";
 import type {
+  AlignmentStatus,
   AppSettings,
   Health,
   Job,
   LanguageChoice,
   ModelInfo,
+  OpenRouterModel,
   SelectedItem,
   ViewName,
 } from "./types";
@@ -24,6 +27,7 @@ interface SettingsBundle {
   settings: AppSettings;
   default_output_dir: string;
   resolved_output_dir: string;
+  openrouter_key_present: boolean;
 }
 
 interface Toast {
@@ -55,9 +59,14 @@ export default function App() {
   const [modelKey, setModelKey] = useState("quality");
   const [glossary, setGlossary] = useState("");
   const [picking, setPicking] = useState(false);
+  const [backend, setBackend] = useState<BackendChoice>("local_mlx");
+  const [openrouterModels, setOpenrouterModels] = useState<OpenRouterModel[]>([]);
+  const [openrouterModel, setOpenrouterModel] = useState("microsoft/mai-transcribe-2");
+  const [alignWithWhisperx, setAlignWithWhisperx] = useState(false);
+  const [alignmentStatus, setAlignmentStatus] = useState<AlignmentStatus | null>(null);
   const initialized = useRef(false);
 
-  const { jobs, connection, fractions, modelDownloads } = useJobs();
+  const { jobs, connection, fractions, modelDownloads, alignmentInstall } = useJobs();
 
   const toast = useCallback((message: string, kind: "info" | "error" = "info") => {
     const id = ++toastCounter;
@@ -76,6 +85,11 @@ export default function App() {
       setLanguage(bundle.settings.default_language);
       setModelKey(bundle.settings.default_model_key);
       setGlossary(bundle.settings.glossary);
+      setBackend(
+        bundle.settings.default_provider === "openrouter" ? "openrouter" : "local_mlx",
+      );
+      setOpenrouterModel(bundle.settings.default_openrouter_model);
+      setAlignWithWhisperx(bundle.settings.default_align_with_whisperx);
     }
   }, []);
 
@@ -84,11 +98,30 @@ export default function App() {
     setModels(result.models);
   }, []);
 
+  const loadAlignment = useCallback(async () => {
+    const status = await api.alignmentStatus();
+    setAlignmentStatus(status);
+  }, []);
+
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
     loadSettings().catch((error: Error) => toast(error.message, "error"));
     loadModels().catch((error: Error) => toast(error.message, "error"));
-  }, [loadSettings, loadModels, toast]);
+    api
+      .listOpenRouterModels()
+      .then((result) => setOpenrouterModels(result.models))
+      .catch((error: Error) => toast(error.message, "error"));
+    loadAlignment().catch(() => undefined);
+  }, [loadSettings, loadModels, loadAlignment, toast]);
+
+  useEffect(() => {
+    if (alignmentInstall?.state === "completed") {
+      void loadAlignment();
+    } else if (alignmentInstall?.state === "failed") {
+      toast(alignmentInstall.message ?? "WhisperX installation failed.", "error");
+      void loadAlignment();
+    }
+  }, [alignmentInstall, loadAlignment, toast]);
 
   useEffect(() => {
     const finished = modelDownloads;
@@ -172,13 +205,26 @@ export default function App() {
         modelKey,
         language,
         glossary,
+        provider: backend,
+        openrouterModel: backend === "openrouter" ? openrouterModel : null,
+        alignWithWhisperx: alignWithWhisperx && alignmentStatus?.installed === true,
       });
       setSelected([]);
       toast(`Queued ${result.jobs.length} job${result.jobs.length === 1 ? "" : "s"}.`);
     } catch (error) {
       toast((error as Error).message, "error");
     }
-  }, [selected, modelKey, language, glossary, toast]);
+  }, [
+    selected,
+    modelKey,
+    language,
+    glossary,
+    toast,
+    backend,
+    openrouterModel,
+    alignWithWhisperx,
+    alignmentStatus,
+  ]);
 
   const wrap = useCallback(
     <T,>(promise: Promise<T>, onSuccess?: (value: T) => void) => {
@@ -198,10 +244,16 @@ export default function App() {
           resolvedOutputDir={settingsBundle.resolved_output_dir}
           models={models}
           modelDownloads={modelDownloads}
+          openrouterModels={openrouterModels}
+          hasOpenRouterKey={settingsBundle.openrouter_key_present}
+          alignmentStatus={alignmentStatus}
+          alignmentInstall={alignmentInstall}
           onSaved={() => {
             void loadSettings();
           }}
           onModelsChanged={() => void loadModels()}
+          onKeyChanged={() => void loadSettings()}
+          onAlignmentChanged={() => void loadAlignment()}
           onToast={toast}
         />
         <Toasts toasts={toasts} />
@@ -230,14 +282,26 @@ export default function App() {
           )}
           <SelectedFiles items={selected} onRemove={(key) => setSelected((current) => current.filter((item) => item.key !== key))} />
           <OptionsBar
+            backend={backend}
             language={language}
             modelKey={modelKey}
+            openrouterModel={openrouterModel}
             glossary={glossary}
             models={models}
+            openrouterModels={openrouterModels}
+            hasOpenRouterKey={settingsBundle?.openrouter_key_present ?? false}
+            alignmentInstalled={alignmentStatus?.installed ?? null}
+            alignmentDevice={alignmentStatus?.device ?? null}
+            alignmentMessage={alignmentStatus?.message ?? null}
+            alignWithWhisperx={alignWithWhisperx}
             disabled={false}
+            onBackendChange={setBackend}
             onLanguageChange={setLanguage}
             onModelChange={setModelKey}
+            onOpenRouterModelChange={setOpenrouterModel}
             onGlossaryChange={setGlossary}
+            onAlignChange={setAlignWithWhisperx}
+            onGoToSettings={() => setView("settings")}
           />
           <div className="start-row">
             <button

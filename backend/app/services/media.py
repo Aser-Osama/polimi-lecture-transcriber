@@ -23,8 +23,8 @@ from app.core.errors import (
     NoAudioTrackError,
     UnsupportedFormatError,
 )
+from app.core.progress import CancellationToken
 from app.models.domain import MediaInfo, MediaStreamInfo
-from app.providers.base import CancellationToken
 
 log = logging.getLogger(__name__)
 

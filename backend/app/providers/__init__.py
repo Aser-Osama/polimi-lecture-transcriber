@@ -7,9 +7,11 @@ from app.providers.base import (
 )
 from app.providers.fake import FakeProvider
 from app.providers.local_mlx import LocalMLXProvider
+from app.providers.openrouter import OpenRouterProvider
 
 _PROVIDERS: dict[str, type[TranscriptionProvider]] = {
     LocalMLXProvider.name: LocalMLXProvider,
+    OpenRouterProvider.name: OpenRouterProvider,
     FakeProvider.name: FakeProvider,
 }
 
@@ -30,6 +32,7 @@ __all__ = [
     "CancellationToken",
     "FakeProvider",
     "LocalMLXProvider",
+    "OpenRouterProvider",
     "ProgressCallback",
     "RawTranscription",
     "TranscriptionProvider",

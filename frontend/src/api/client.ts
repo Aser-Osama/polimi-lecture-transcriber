@@ -1,9 +1,11 @@
 import type {
+  AlignmentStatus,
   AppSettings,
   Health,
   Job,
   LanguageChoice,
   ModelInfo,
+  OpenRouterModel,
   PickFile,
   PreviewData,
   UploadResponse,
@@ -53,15 +55,36 @@ export interface CreateJobOptions {
   modelKey: string;
   language: LanguageChoice;
   glossary?: string;
+  provider?: string;
+  openrouterModel?: string | null;
+  alignWithWhisperx?: boolean;
 }
 
 export const api = {
   health: () => request<Health>("/api/health"),
 
   getSettings: () =>
-    request<{ settings: AppSettings; default_output_dir: string; resolved_output_dir: string }>(
-      "/api/settings",
-    ),
+    request<{
+      settings: AppSettings;
+      default_output_dir: string;
+      resolved_output_dir: string;
+      openrouter_key_present: boolean;
+    }>("/api/settings"),
+
+  storeOpenRouterKey: (key: string) =>
+    request<{ stored: boolean }>("/api/settings/openrouter_key", {
+      method: "PUT",
+      body: JSON.stringify({ key }),
+    }),
+
+  deleteOpenRouterKey: () =>
+    request<{ deleted: boolean }>("/api/settings/openrouter_key", { method: "DELETE" }),
+
+  listOpenRouterModels: () => request<{ models: OpenRouterModel[] }>("/api/models/openrouter"),
+
+  alignmentStatus: () => request<AlignmentStatus>("/api/alignment/status"),
+
+  installAlignment: () => request<{ state: string }>("/api/alignment/install", { method: "POST" }),
 
   updateSettings: (patch: Partial<AppSettings>) =>
     request<{ settings: AppSettings; resolved_output_dir: string }>("/api/settings", {
@@ -79,6 +102,9 @@ export const api = {
         model_key: options.modelKey,
         language: options.language,
         glossary: options.glossary ?? null,
+        provider: options.provider ?? "local_mlx",
+        openrouter_model: options.openrouterModel ?? null,
+        align_with_whisperx: options.alignWithWhisperx ?? false,
       }),
     }),
 

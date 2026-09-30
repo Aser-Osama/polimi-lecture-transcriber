@@ -80,3 +80,31 @@ class InvalidSourceError(AppError):
 class WorkerError(AppError):
     code = "worker_error"
     user_message = "The transcription worker stopped unexpectedly."
+
+
+class SecretsError(AppError):
+    code = "secrets_error"
+    user_message = "The OpenRouter API key could not be accessed in the macOS Keychain."
+
+
+class OpenRouterError(AppError):
+    code = "openrouter_error"
+    user_message = "The OpenRouter request failed."
+
+
+class OpenRouterAuthError(OpenRouterError):
+    code = "openrouter_auth_error"
+    user_message = "OpenRouter rejected the API key. Check it in Settings."
+
+
+class OpenRouterNoKeyError(OpenRouterError):
+    code = "openrouter_no_key"
+    user_message = "No OpenRouter API key is configured. Add one in Settings."
+
+
+class AlignmentNotInstalledError(AppError):
+    code = "alignment_not_installed"
+    user_message = (
+        "WhisperX alignment is not installed. Install it from Settings "
+        "(or run ./setup.sh --with-whisperx)."
+    )

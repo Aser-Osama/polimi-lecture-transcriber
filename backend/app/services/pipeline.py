@@ -16,10 +16,18 @@ from pathlib import Path
 
 from app.alignment.base import AlignmentProvider
 from app.alignment.mlx_word_aligner import MLXWordTimestampAligner
+from app.alignment.tiny_anchor import build_alignment_windows, map_remote_tokens
+from app.alignment.whisperx_aligner import WhisperXAligner
 from app.config import AppPaths
 from app.exporters import json_exporter, srt, txt, vtt
-from app.models.domain import AppSettings, Job, utcnow
-from app.models.result import AlignedWord, OutputPaths, StageTimings, TranscriptResult
+from app.models.domain import AppSettings, Job, ProviderName, utcnow
+from app.models.result import (
+    AlignedWord,
+    OutputPaths,
+    RawSegment,
+    StageTimings,
+    TranscriptResult,
+)
 from app.providers import create_provider
 from app.providers.base import (
     CancellationToken,
@@ -28,10 +36,13 @@ from app.providers.base import (
     TranscriptionRequest,
     noop_progress,
 )
+from app.providers.local_mlx import LocalMLXProvider
+from app.providers.openrouter import segments_from_words
 from app.services import media as media_service
 from app.services.glossary import build_initial_prompt
-from app.services.outputs import create_output_files, write_text_atomic
+from app.services.outputs import create_output_files, release_unwritten, write_text_atomic
 from app.services.registry import get_model_spec
+from app.services.whisperx import whisperx_status
 from app.subtitles.segmenter import (
     SegmenterOptions,
     segment_from_segments,
@@ -48,6 +59,9 @@ def noop_stage_progress(stage: str, message: str | None = None, fraction: float 
     pass
 
 
+ANCHOR_MODEL_REPO = "mlx-community/whisper-tiny"
+
+
 @dataclass
 class PipelineOutcome:
     result: TranscriptResult
@@ -57,6 +71,8 @@ class PipelineOutcome:
     detected_language: str | None = None
     media_duration: float | None = None
     quantized_cues: list[QuantizedCue] = field(default_factory=list)
+    provider_meta: dict = field(default_factory=dict)
+    alignment_provider: str | None = None
 
 
 @dataclass
@@ -70,6 +86,8 @@ class PipelineContext:
     cancel: CancellationToken = field(default_factory=CancellationToken)
     provider: TranscriptionProvider | None = None
     aligner: AlignmentProvider | None = None
+    whisperx_aligner: AlignmentProvider | None = None
+    anchor_provider: TranscriptionProvider | None = None
     provider_options: dict = field(default_factory=dict)
 
 
@@ -121,7 +139,16 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
 
     # --- transcription -----------------------------------------------------
     provider = ctx.provider or create_provider(job.config.provider.value)
-    model_spec = get_model_spec(job.config.model_key)
+    is_remote = job.config.provider == ProviderName.OPENROUTER
+    if is_remote:
+        from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL
+
+        model_repo = job.config.openrouter_model or DEFAULT_OPENROUTER_MODEL
+        result_model_key = "openrouter"
+    else:
+        model_spec = get_model_spec(job.config.model_key)
+        model_repo = model_spec.repo_id
+        result_model_key = model_spec.key
     initial_prompt = build_initial_prompt(job.config.glossary)
 
     options = {**ctx.provider_options, **job.config.options}
@@ -129,9 +156,10 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
         options.setdefault("fake_media_duration", media_duration)
     request = TranscriptionRequest(
         audio_path=audio_path,
-        model_repo=model_spec.repo_id,
+        model_repo=model_repo,
         language=job.config.language.whisper_code,
         initial_prompt=initial_prompt,
+        media_duration=media_duration,
         options=options,
     )
 
@@ -153,16 +181,20 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
     if "model_start" in stage_marks:  # provider never reported "transcribing"
         timings.model_load = time.monotonic() - stage_marks.pop("model_start")
     timings.inference = transcription.duration or 0.0
+    provider_meta = dict(transcription.meta)
+    if provider_meta.get("warnings"):
+        warnings.extend(provider_meta.pop("warnings"))
     cancel.raise_if_cancelled()
 
     # --- alignment ---------------------------------------------------------
     ctx.progress("aligning", "Aligning word timestamps")
-    aligner = ctx.aligner or MLXWordTimestampAligner()
     t0 = time.monotonic()
-    alignment = aligner.align(transcription, media_duration, noop_progress, cancel)
+    transcription.meta = {**provider_meta, "audio_path": str(audio_path)}
+    words, alignment_provider_used, alignment_warnings = _align_transcription(
+        ctx, transcription, media_duration, cancel
+    )
     timings.alignment = time.monotonic() - t0
-    warnings.extend(alignment.warnings)
-    words: list[AlignedWord] = alignment.words
+    warnings.extend(alignment_warnings)
     cancel.raise_if_cancelled()
 
     # --- subtitle segmentation --------------------------------------------
@@ -198,13 +230,18 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
     stem, output_paths = create_output_files(output_dir, job.source_filename)
     written: set[str] = set()
 
+    export_segments = transcription.segments
+    if not export_segments and words:
+        export_segments = segments_from_words(words)
+
     try:
-        write_text_atomic(output_paths["txt"], txt.render(transcription.segments))
+        write_text_atomic(output_paths["txt"], txt.render(export_segments))
         written.add("txt")
-        write_text_atomic(output_paths["srt"], srt.render(quantized))
-        written.add("srt")
-        write_text_atomic(output_paths["vtt"], vtt.render(quantized))
-        written.add("vtt")
+        if quantized:
+            write_text_atomic(output_paths["srt"], srt.render(quantized))
+            written.add("srt")
+            write_text_atomic(output_paths["vtt"], vtt.render(quantized))
+            written.add("vtt")
 
         processing_duration = time.monotonic() - started
         timings.total = round(processing_duration, 3)
@@ -216,8 +253,8 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
             source_metadata=media_info,
             media_duration=media_duration,
             provider=provider.name,
-            model_key=model_spec.key,
-            model_id=model_spec.repo_id,
+            model_key=result_model_key,
+            model_id=model_repo,
             language_requested=job.config.language.value,
             language_detected=transcription.language,
             glossary=job.config.glossary,
@@ -234,29 +271,32 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
                 else None
             ),
             timings=timings,
+            provider_meta=provider_meta,
+            alignment_provider=alignment_provider_used,
         )
         result.output_paths = OutputPaths(
             txt=str(output_paths["txt"]),
-            srt=str(output_paths["srt"]),
-            vtt=str(output_paths["vtt"]),
+            srt=str(output_paths["srt"]) if quantized else None,
+            vtt=str(output_paths["vtt"]) if quantized else None,
             json_path=str(output_paths["json"]),
         )
         write_text_atomic(output_paths["json"], json_exporter.render(result))
         written.add("json")
+        # Remove placeholders for outputs that were not produced (e.g. no cues).
+        release_unwritten(output_paths, written)
     except Exception:
-        from app.services.outputs import release_unwritten
-
         release_unwritten(output_paths, written)
         raise
     timings.saving = time.monotonic() - t0
 
     outputs = {
         "txt": str(output_paths["txt"]),
-        "srt": str(output_paths["srt"]),
-        "vtt": str(output_paths["vtt"]),
         "json": str(output_paths["json"]),
         "basename": stem,
     }
+    if quantized:
+        outputs["srt"] = str(output_paths["srt"])
+        outputs["vtt"] = str(output_paths["vtt"])
     log.info(
         "Job %s finished: %d cues, %.1fs media in %.1fs (%.2fx)",
         job.id,
@@ -273,7 +313,117 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
         detected_language=transcription.language,
         media_duration=media_duration,
         quantized_cues=quantized,
+        provider_meta=provider_meta,
+        alignment_provider=alignment_provider_used,
     )
+
+
+def _align_transcription(
+    ctx: PipelineContext,
+    transcription: RawTranscription,
+    media_duration: float | None,
+    cancel: CancellationToken,
+) -> tuple[list[AlignedWord], str | None, list[str]]:
+    """Build word timings for this transcription.
+
+    Returns (words, alignment_provider_name, warnings).
+
+    1. Native word timestamps are extracted first (Whisper cross-attention DTW
+       or the remote model's own words).
+    2. With 'Improve subtitle alignment' enabled, WhisperX re-times the
+       transcript against the audio (never re-transcribing it).
+    3. When a remote model returned no timing at all, a local Whisper tiny
+       anchor pass supplies real speech windows for WhisperX.
+    """
+    warnings: list[str] = []
+    native_aligner = ctx.aligner or MLXWordTimestampAligner()
+    native = native_aligner.align(transcription, media_duration, noop_progress, cancel)
+    warnings.extend(native.warnings)
+    native_words = native.words
+    native_provider = "native_word_timestamps" if native_words else None
+
+    if not ctx.job.config.align_with_whisperx:
+        return native_words, native_provider, warnings
+
+    status = whisperx_status()
+    whisperx = ctx.whisperx_aligner or WhisperXAligner()
+    if not (status.get("installed") and whisperx.is_available()):
+        warnings.append(
+            "WhisperX alignment is not installed; native timestamps were kept. "
+            "Install it from Settings."
+        )
+        return native_words, native_provider, warnings
+
+    def whisperx_progress(stage: str, message: str | None = None, fraction: float | None = None) -> None:
+        ctx.progress("aligning", message, fraction)
+
+    # Case 1: the provider returned segments - align them directly.
+    if transcription.segments:
+        aligned = whisperx.align(transcription, media_duration, whisperx_progress, cancel)
+        warnings.extend(aligned.warnings)
+        if aligned.words:
+            return aligned.words, "whisperx", warnings
+        return native_words, native_provider, warnings
+
+    # Case 2: words without segments - derive segment windows from the words.
+    if native_words:
+        synthetic = transcription.model_copy(
+            update={"segments": segments_from_words(native_words)}
+        )
+        aligned = whisperx.align(synthetic, media_duration, whisperx_progress, cancel)
+        warnings.extend(aligned.warnings)
+        if aligned.words:
+            return aligned.words, "whisperx", warnings
+        return native_words, native_provider, warnings
+
+    # Case 3: text only - local tiny anchor pass, then WhisperX in those windows.
+    ctx.progress("aligning", "Running local speech anchor pass (Whisper tiny)")
+    anchor_provider = ctx.anchor_provider or LocalMLXProvider()
+    anchor_request = TranscriptionRequest(
+        audio_path=Path(str(transcription.meta.get("audio_path", ""))),
+        model_repo=ANCHOR_MODEL_REPO,
+        language=ctx.job.config.language.whisper_code,
+        media_duration=media_duration,
+    )
+
+    def anchor_progress(stage: str, message: str | None = None, fraction: float | None = None) -> None:
+        if stage == "loading_model":
+            ctx.progress("aligning", "Loading anchor model (Whisper tiny)", None)
+        else:
+            ctx.progress("aligning", "Speech anchor pass (Whisper tiny)", fraction)
+
+    anchor_result = anchor_provider.transcribe_sync(anchor_request, anchor_progress, cancel)
+    anchor_alignment = MLXWordTimestampAligner().align(
+        anchor_result, media_duration, noop_progress, cancel
+    )
+    if not anchor_alignment.words:
+        warnings.append(
+            "The local anchor pass produced no word timings; subtitles were not generated."
+        )
+        return [], None, warnings
+
+    remote_text = transcription.text or " ".join(s.text for s in transcription.segments)
+    mapping = map_remote_tokens(remote_text, anchor_alignment.words, media_duration)
+    warnings.extend(mapping.warnings)
+    if not mapping.ok:
+        return [], None, warnings
+
+    windows = build_alignment_windows(mapping.words, anchor_result.segments)
+    if windows:
+        window_transcription = RawTranscription(
+            text=remote_text,
+            language=transcription.language,
+            segments=[
+                RawSegment(id=index, start=w["start"], end=w["end"], text=w["text"])
+                for index, w in enumerate(windows)
+            ],
+            meta=transcription.meta,
+        )
+        aligned = whisperx.align(window_transcription, media_duration, whisperx_progress, cancel)
+        warnings.extend(aligned.warnings)
+        if aligned.words:
+            return aligned.words, "tiny_anchor+whisperx", warnings
+    return mapping.words, "tiny_anchor", warnings
 
 
 def cleanup_work_dir(work_dir: Path, keep: bool = False) -> None:

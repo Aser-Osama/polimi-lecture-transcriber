@@ -16,7 +16,12 @@ from app.api.routes_media import resolve_upload_path
 from app.api.schemas import CreateJobsRequest, RegenerateRequest
 from app.core.errors import AppError, InvalidSourceError
 from app.exporters import json_exporter, srt, vtt
-from app.models.domain import ACTIVE_STATUSES, TERMINAL_STATUSES, JobConfig
+from app.models.domain import (
+    ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    JobConfig,
+    ProviderName,
+)
 from app.services import media as media_service
 from app.services.outputs import (
     allocate_stem,
@@ -56,11 +61,26 @@ async def create_jobs(request: Request, body: CreateJobsRequest) -> dict:
             model_key=body.model_key,
             language=body.language,
             provider=body.provider,
+            openrouter_model=body.openrouter_model,
+            align_with_whisperx=body.align_with_whisperx,
             glossary=glossary,
             options=body.options,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if config.provider == ProviderName.OPENROUTER:
+        from app.services import secrets
+
+        try:
+            has_key = await asyncio.to_thread(secrets.has_api_key)
+        except Exception:
+            has_key = False
+        if not has_key:
+            raise HTTPException(
+                status_code=422,
+                detail="No OpenRouter API key is configured. Add one in Settings, then try again.",
+            )
 
     created: list[dict] = []
     for source in body.sources:

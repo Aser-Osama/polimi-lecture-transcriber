@@ -19,11 +19,18 @@ interface StreamEvent {
   error?: string;
 }
 
+export interface AlignmentInstallEvent {
+  state: string;
+  message: string | null;
+  fraction?: number | null;
+}
+
 export function useJobs() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [fractions, setFractions] = useState<Record<string, StageFraction>>({});
   const [modelDownloads, setModelDownloads] = useState<Record<string, ModelDownloadState>>({});
+  const [alignmentInstall, setAlignmentInstall] = useState<AlignmentInstallEvent | null>(null);
   const [lastEvent, setLastEvent] = useState<StreamEvent | null>(null);
   const reconnectCount = useRef(0);
 
@@ -93,6 +100,13 @@ export function useJobs() {
             }));
           }
           break;
+        case "alignment_install":
+          setAlignmentInstall({
+            state: event.state ?? "idle",
+            message: event.message ?? null,
+            fraction: event.fraction ?? null,
+          });
+          break;
         case "refresh":
           void refresh();
           break;
@@ -107,5 +121,13 @@ export function useJobs() {
     };
   }, [refresh]);
 
-  return { jobs, connection, fractions, modelDownloads, lastEvent, refresh };
+  return {
+    jobs,
+    connection,
+    fractions,
+    modelDownloads,
+    alignmentInstall,
+    lastEvent,
+    refresh,
+  };
 }

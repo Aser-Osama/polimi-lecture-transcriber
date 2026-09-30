@@ -46,7 +46,18 @@ class CreateJobsRequest(BaseModel):
     language: LanguageChoice = LanguageChoice.ENGLISH
     glossary: str | None = None
     provider: ProviderName = ProviderName.LOCAL_MLX
+    openrouter_model: str | None = None
+    align_with_whisperx: bool = False
     options: dict[str, Any] = Field(default_factory=dict)
+
+
+class OpenRouterKeyRequest(BaseModel):
+    key: str
+
+
+class AlignmentInstallState(BaseModel):
+    state: str = "idle"  # idle|installing|completed|failed
+    message: str | None = None
 
 
 class RegenerateRequest(BaseModel):

@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import base64
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+from app.core.errors import CancelledError, OpenRouterAuthError, OpenRouterNoKeyError
+from app.models.result import RawWord
+from app.providers.base import CancellationToken, TranscriptionRequest
+from app.providers.openrouter import OpenRouterProvider, segments_from_words
+from tests.conftest import requires_ffmpeg  # noqa: F401
+
+
+@pytest.fixture
+def no_key(monkeypatch):
+    monkeypatch.setattr("app.providers.openrouter.secrets.load_api_key", lambda: None)
+
+
+@pytest.fixture
+def with_key(monkeypatch):
+    monkeypatch.setattr("app.providers.openrouter.secrets.load_api_key", lambda: "sk-or-test")
+
+
+def request_for(audio: Path, **options) -> TranscriptionRequest:
+    return TranscriptionRequest(
+        audio_path=audio,
+        model_repo=options.pop("model", "openai/whisper-large-v3"),
+        language=options.pop("language", "en"),
+        media_duration=options.pop("duration", 6.0),
+        options=options,
+    )
+
+
+def words_payload(offset: float) -> dict:
+    return {
+        "text": "Welcome to the lecture.",
+        "language": "en",
+        "duration": 6.0,
+        "segments": [
+            {"start": 0.0 + offset, "end": 3.0 + offset, "text": "Welcome to the"},
+            {"start": 3.0 + offset, "end": 6.0 + offset, "text": "lecture."},
+        ],
+        "words": [
+            {"word": "Welcome", "start": 0.1 + offset, "end": 0.6 + offset},
+            {"word": "lecture.", "start": 3.2 + offset, "end": 3.9 + offset},
+        ],
+        "usage": {"cost": 0.001, "seconds": 6.0},
+    }
+
+
+def noop(stage, message=None, fraction=None):
+    pass
+
+
+def test_missing_key_raises(no_key, tmp_path):
+    provider = OpenRouterProvider(base_url="http://mock")
+    request = request_for(tmp_path / "missing.wav")
+    with pytest.raises(OpenRouterNoKeyError):
+        provider.transcribe_sync(request, noop, CancellationToken())
+
+
+@requires_ffmpeg
+def test_verbose_json_single_chunk(with_key, sine_wav, monkeypatch):
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        assert request.headers["Authorization"].startswith("Bearer sk-or-test")
+        return httpx.Response(200, json=words_payload(0.0))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    result = provider.transcribe_sync(request_for(sine_wav), noop, CancellationToken())
+
+    assert len(calls) == 1
+    assert calls[0]["response_format"] == "verbose_json"
+    assert calls[0]["timestamp_granularities"] == ["segment", "word"]
+    assert calls[0]["input_audio"]["format"] == "mp3"
+    raw = base64.b64decode(calls[0]["input_audio"]["data"])
+    assert raw[:2] == b"\xff\xf3" or raw[:2] == b"\xff\xfb" or len(raw) > 1000  # mp3 payload
+    assert result.segments and result.segments[0].text == "Welcome to the"
+    assert result.segments[0].words or result.segments[1].words
+    assert result.meta["native_word_timestamps"] is True
+    assert result.meta["cost_usd"] == pytest.approx(0.001, abs=1e-9)
+    assert result.meta["chunks"] == 1
+
+
+@requires_ffmpeg
+def test_chunk_offsets_are_applied(with_key, sine_wav, monkeypatch):
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "TARGET_CHUNK_SECONDS", 3.0)
+    monkeypatch.setattr(chunking, "MAX_CHUNK_SECONDS", 4.0)
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.4)
+
+    counter = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        index = counter["n"]
+        counter["n"] += 1
+        # second chunk response timestamps are chunk-relative
+        payload = words_payload(0.0 if index == 0 else 0.0)
+        payload["segments"] = [
+            {"start": 0.0, "end": 2.5, "text": f"chunk {index}"},
+        ]
+        return httpx.Response(200, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    result = provider.transcribe_sync(request_for(sine_wav, duration=6.0), noop, CancellationToken())
+
+    assert counter["n"] >= 2
+    starts = [segment.start for segment in result.segments]
+    assert starts == sorted(starts)
+    assert starts[-1] >= 2.5  # offset of the later chunk applied
+    assert result.meta["chunks"] >= 2
+
+
+@requires_ffmpeg
+def test_verbose_rejected_falls_back_to_text_only(with_key, sine_wav):
+    verbose_attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload.get("response_format") == "verbose_json":
+            verbose_attempts["n"] += 1
+            return httpx.Response(400, json={"error": {"message": "verbose_json not supported"}})
+        return httpx.Response(
+            200,
+            json={"text": "Welcome to the lecture.", "usage": {"cost": 0.0005, "seconds": 6.0}},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    result = provider.transcribe_sync(request_for(sine_wav), noop, CancellationToken())
+
+    assert verbose_attempts["n"] == 1  # learned after the first chunk
+    assert result.segments == []
+    assert result.meta["native_word_timestamps"] is False
+    assert result.text == "Welcome to the lecture."
+    assert any("no timestamps" in warning for warning in result.meta["warnings"])
+
+
+@requires_ffmpeg
+def test_auth_error_is_explicit(with_key, sine_wav):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "Invalid key"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    with pytest.raises(OpenRouterAuthError):
+        provider.transcribe_sync(request_for(sine_wav), noop, CancellationToken())
+
+
+@requires_ffmpeg
+def test_retries_on_rate_limit(with_key, sine_wav, monkeypatch):
+    monkeypatch.setattr("app.providers.openrouter._RETRY_BACKOFF", (0.01, 0.01))
+    statuses = [429, 429, 200]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = statuses.pop(0)
+        if status == 200:
+            return httpx.Response(200, json=words_payload(0.0))
+        return httpx.Response(status, json={"error": {"message": "rate limited"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    result = provider.transcribe_sync(request_for(sine_wav), noop, CancellationToken())
+    assert result.meta["chunks"] == 1
+    assert statuses == []
+
+
+@requires_ffmpeg
+def test_cancellation_between_chunks(with_key, sine_wav, monkeypatch):
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "TARGET_CHUNK_SECONDS", 2.0)
+    monkeypatch.setattr(chunking, "MAX_CHUNK_SECONDS", 3.0)
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.4)
+
+    token = CancellationToken()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token.cancel()  # cancel while the first chunk is in flight
+        return httpx.Response(200, json=words_payload(0.0))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    with pytest.raises(CancelledError):
+        provider.transcribe_sync(request_for(sine_wav, duration=6.0), noop, token)
+
+
+def test_segments_from_words_groups_on_pauses_and_sentences():
+    words = [
+        RawWord(text="Hello", start=0.0, end=0.4),
+        RawWord(text="world.", start=0.5, end=0.9),
+        RawWord(text="After", start=2.5, end=2.9),
+        RawWord(text="a", start=3.0, end=3.1),
+        RawWord(text="pause.", start=3.2, end=3.6),
+    ]
+    segments = segments_from_words(words)
+    assert len(segments) == 2
+    assert segments[0].text == "Hello world."
+    assert segments[1].start == 2.5

@@ -195,6 +195,8 @@ def _execute_job(paths, job: Job, settings: AppSettings, token: CancellationToke
             "media_duration": outcome.media_duration,
             "processing_duration": outcome.result.processing_duration_seconds,
             "realtime_factor": outcome.result.realtime_factor,
+            "provider_meta": outcome.provider_meta,
+            "alignment_provider": outcome.alignment_provider,
         }
     )
     _cleanup_work_dir(work_dir)

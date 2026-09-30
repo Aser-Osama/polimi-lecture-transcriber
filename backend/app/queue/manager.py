@@ -482,6 +482,10 @@ class JobManager:
         if kind == "completed":
             job.outputs = event.get("outputs", {})
             job.timings = {k: float(v) for k, v in (event.get("timings") or {}).items()}
+            meta = dict(event.get("provider_meta") or {})
+            if event.get("alignment_provider"):
+                meta["alignment_provider"] = event["alignment_provider"]
+            job.provider_meta = meta
             job.detected_language = event.get("detected_language")
             if event.get("media_duration") and job.media:
                 job.media.duration_seconds = event["media_duration"]

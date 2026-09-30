@@ -11,7 +11,10 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_bus, get_manager, get_paths
 from app.api.schemas import RevealRequest
+from app.core.errors import AppError
+from app.providers.base import CancellationToken
 from app.services import media as media_service
+from app.services import whisperx as whisperx_service
 from app.services.model_cache import hf_cache_dir
 from app.utils.proc import open_in_finder
 from app.version import APP_VERSION, RESULT_SCHEMA_VERSION
@@ -74,6 +77,63 @@ async def events(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/alignment/status")
+async def alignment_status(request: Request) -> dict:
+    status = await asyncio.to_thread(whisperx_service.whisperx_status)
+    install = getattr(request.app.state, "alignment_install", None) or {"state": "idle"}
+    return {**status, "install": install}
+
+
+@router.post("/alignment/install")
+async def alignment_install(request: Request) -> dict:
+    state = getattr(request.app.state, "alignment_install", None)
+    if state is None:
+        state = {"state": "idle", "message": None}
+        request.app.state.alignment_install = state
+    if state.get("state") == "installing":
+        return dict(state)
+
+    bus = get_bus(request)
+    cancel = CancellationToken()
+    request.app.state.alignment_install_cancel = cancel
+
+    def progress(message: str, fraction: float | None) -> None:
+        state.update(state="installing", message=message)
+        bus.publish_threadsafe(
+            {"type": "alignment_install", "state": "installing", "message": message, "fraction": fraction}
+        )
+
+    def run() -> None:
+        try:
+            whisperx_service.install_whisperx(progress, cancel)
+        except AppError as exc:
+            state.update(state="failed", message=exc.user_message)
+            bus.publish_threadsafe(
+                {"type": "alignment_install", "state": "failed", "message": exc.user_message}
+            )
+            log.exception("WhisperX installation failed")
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            state.update(state="failed", message=str(exc))
+            bus.publish_threadsafe(
+                {"type": "alignment_install", "state": "failed", "message": str(exc)}
+            )
+            log.exception("WhisperX installation failed")
+            return
+        state.update(state="completed", message="WhisperX alignment is ready")
+        bus.publish_threadsafe(
+            {
+                "type": "alignment_install",
+                "state": "completed",
+                "message": "WhisperX alignment is ready",
+            }
+        )
+
+    state.update(state="installing", message="Starting installation")
+    asyncio.get_running_loop().run_in_executor(None, run)
+    return dict(state)
 
 
 @router.post("/actions/reveal")

@@ -94,6 +94,7 @@ def create_app() -> FastAPI:
         app.state.event_bus = event_bus
         app.state.manager = manager
         app.state.model_downloads = ModelDownloadTracker()
+        app.state.alignment_install = {"state": "idle", "message": None}
 
         await manager.start()
         log.info("Application ready on http://%s:%s", default_host(), default_port())

@@ -46,8 +46,10 @@ export function HistoryView({ jobs, models, onPreview, onRetry, onReveal, onDele
                     <span className="history-size">{formatBytes(job.size_bytes)}</span>
                   </td>
                   <td>
-                    {models.find((model) => model.key === job.config.model_key)?.display_name ??
-                      job.config.model_key}
+                    {job.config.provider === "openrouter"
+                      ? `OpenRouter · ${job.config.openrouter_model ?? ""}`
+                      : (models.find((model) => model.key === job.config.model_key)
+                          ?.display_name ?? job.config.model_key)}
                   </td>
                   <td>{LANGUAGE_LABELS[job.config.language] ?? job.config.language}</td>
                   <td>{formatDuration(job.media?.duration_seconds ?? null)}</td>
@@ -73,14 +75,16 @@ export function HistoryView({ jobs, models, onPreview, onRetry, onReveal, onDele
                         >
                           Transcript
                         </a>
-                        <a
-                          className="btn btn-small"
-                          href={`/api/jobs/${job.id}/outputs/srt`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          SRT
-                        </a>
+                        {job.outputs["srt"] && (
+                          <a
+                            className="btn btn-small"
+                            href={`/api/jobs/${job.id}/outputs/srt`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            SRT
+                          </a>
+                        )}
                         <button type="button" className="btn btn-small" onClick={() => onReveal(job.id)}>
                           Finder
                         </button>

@@ -67,8 +67,8 @@ class OutputPaths(BaseModel):
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     txt: str
-    srt: str
-    vtt: str
+    srt: str | None = None
+    vtt: str | None = None
     json_path: str = Field(alias="json")
 
 
@@ -96,3 +96,5 @@ class TranscriptResult(BaseModel):
     realtime_factor: float | None = None
     timings: StageTimings = Field(default_factory=StageTimings)
     output_paths: OutputPaths | None = None
+    alignment_provider: str | None = None
+    provider_meta: dict = Field(default_factory=dict)
