@@ -41,3 +41,6 @@ logs/
 
 # macOS
 .DS_Store
+
+# opencode session/tooling config (not part of the app)
+opencode.json
