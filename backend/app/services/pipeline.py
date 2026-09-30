@@ -17,10 +17,10 @@ from pathlib import Path
 from app.alignment.base import AlignmentProvider
 from app.alignment.mlx_word_aligner import MLXWordTimestampAligner
 from app.config import AppPaths
-from app.core.errors import CancelledError
 from app.exporters import json_exporter, srt, txt, vtt
 from app.models.domain import AppSettings, Job, utcnow
 from app.models.result import AlignedWord, OutputPaths, StageTimings, TranscriptResult
+from app.providers import create_provider
 from app.providers.base import (
     CancellationToken,
     RawTranscription,
@@ -28,7 +28,6 @@ from app.providers.base import (
     TranscriptionRequest,
     noop_progress,
 )
-from app.providers import create_provider
 from app.services import media as media_service
 from app.services.glossary import build_initial_prompt
 from app.services.outputs import create_output_files, write_text_atomic

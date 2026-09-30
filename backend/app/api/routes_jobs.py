@@ -16,7 +16,7 @@ from app.api.routes_media import resolve_upload_path
 from app.api.schemas import CreateJobsRequest, RegenerateRequest
 from app.core.errors import AppError, InvalidSourceError
 from app.exporters import json_exporter, srt, vtt
-from app.models.domain import ACTIVE_STATUSES, JobConfig, TERMINAL_STATUSES, JobStatus
+from app.models.domain import ACTIVE_STATUSES, TERMINAL_STATUSES, JobConfig
 from app.services import media as media_service
 from app.services.outputs import (
     allocate_stem,
@@ -60,7 +60,7 @@ async def create_jobs(request: Request, body: CreateJobsRequest) -> dict:
             options=body.options,
         )
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     created: list[dict] = []
     for source in body.sources:
@@ -80,7 +80,9 @@ async def create_jobs(request: Request, body: CreateJobsRequest) -> dict:
         try:
             media_info = await asyncio.to_thread(media_service.probe_media, path)
         except AppError as exc:
-            raise HTTPException(status_code=422, detail=f"{path.name}: {exc.user_message}")
+            raise HTTPException(
+                status_code=422, detail=f"{path.name}: {exc.user_message}"
+            ) from exc
 
         if not media_info.has_audio:
             raise HTTPException(
@@ -110,7 +112,6 @@ async def clear_finished(request: Request) -> dict:
 
 @router.post("/regenerate")
 async def regenerate(request: Request, body: RegenerateRequest) -> dict:
-    paths = get_paths(request)
     db = get_db(request)
     settings = get_settings_store(request).get()
 
@@ -138,7 +139,7 @@ async def regenerate(request: Request, body: RegenerateRequest) -> dict:
         raise HTTPException(
             status_code=422,
             detail=f"This JSON file is not a valid Polimi Transcriber result: {exc}",
-        )
+        ) from exc
     if result.schema_version > RESULT_SCHEMA_VERSION:
         raise HTTPException(
             status_code=422,
@@ -249,9 +250,9 @@ async def retry_job(request: Request, job_id: str) -> dict:
     try:
         job = await manager.retry_job(job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="Job not found.")
+        raise HTTPException(status_code=404, detail="Job not found.") from None
     except InvalidSourceError as exc:
-        raise HTTPException(status_code=422, detail=exc.user_message)
+        raise HTTPException(status_code=422, detail=exc.user_message) from exc
     return job.public_view()
 
 
@@ -278,7 +279,7 @@ async def delete_job(request: Request, job_id: str, delete_outputs: bool = False
     try:
         await manager.remove_job(job_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"deleted": True, "deleted_outputs": deleted_files}
 
 
@@ -325,7 +326,7 @@ async def preview(request: Request, job_id: str) -> dict:
     try:
         result = json_exporter.parse(json_path.read_text(encoding="utf-8"))
     except (ValidationError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=f"Result file unreadable: {exc}")
+        raise HTTPException(status_code=422, detail=f"Result file unreadable: {exc}") from exc
     media_path = Path(job.source_path)
     media_available = media_path.is_file()
     return {

@@ -56,16 +56,18 @@ def test_health_and_root_fallback(running_server):
 
 
 def test_sse_stream_snapshot_and_live_event(running_server):
-    with httpx.Client(timeout=httpx.Timeout(10.0)) as client:
-        with client.stream("GET", f"{running_server}/api/events") as response:
-            assert response.status_code == 200
-            assert response.headers["content-type"].startswith("text/event-stream")
-            saw_snapshot = False
-            for line in response.iter_lines():
-                if line.startswith("data: "):
-                    payload = json.loads(line[len("data: ") :])
-                    assert payload["type"] == "snapshot"
-                    assert "jobs" in payload
-                    saw_snapshot = True
-                    break
-            assert saw_snapshot
+    with (
+        httpx.Client(timeout=httpx.Timeout(10.0)) as client,
+        client.stream("GET", f"{running_server}/api/events") as response,
+    ):
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        saw_snapshot = False
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                payload = json.loads(line[len("data: ") :])
+                assert payload["type"] == "snapshot"
+                assert "jobs" in payload
+                saw_snapshot = True
+                break
+        assert saw_snapshot

@@ -53,7 +53,7 @@ def test_srt_no_overlaps_after_render():
         s, ms = rest.split(",")
         return ((int(h) * 60 + int(m)) * 60 + int(s)) * 1000 + int(ms)
 
-    for (_, end), (start, _) in zip(stamps, stamps[1:]):
+    for (_, end), (start, _) in zip(stamps, stamps[1:], strict=False):
         assert to_ms(end) <= to_ms(start)
 
 

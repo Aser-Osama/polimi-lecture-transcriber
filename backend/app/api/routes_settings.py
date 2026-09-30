@@ -37,7 +37,7 @@ async def update_settings(request: Request, patch: dict) -> dict:
     try:
         settings = get_settings_store(request).update(patch)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=_jsonable_errors(exc))
+        raise HTTPException(status_code=422, detail=_jsonable_errors(exc)) from exc
     paths = get_paths(request)
     return {
         "settings": settings.model_dump(mode="json"),

@@ -27,7 +27,7 @@ class AppPaths:
     db_path: Path
 
     @classmethod
-    def from_env(cls) -> "AppPaths":
+    def from_env(cls) -> AppPaths:
         data_dir = _env_path(
             "PT_DATA_DIR", Path.home() / "Library" / "Application Support" / APP_SLUG
         )

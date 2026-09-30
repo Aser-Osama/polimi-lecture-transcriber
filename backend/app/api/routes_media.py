@@ -90,7 +90,9 @@ async def upload_media(request: Request, file: UploadFile = File(...)) -> Upload
                 size += len(chunk)
     except OSError as exc:
         _remove_upload(directory)
-        raise HTTPException(status_code=500, detail=f"Could not store the uploaded file: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Could not store the uploaded file: {exc}"
+        ) from exc
     finally:
         await file.close()
 
@@ -102,7 +104,7 @@ async def upload_media(request: Request, file: UploadFile = File(...)) -> Upload
         media_info = await asyncio.to_thread(media_service.probe_media, destination)
     except AppError as exc:
         _remove_upload(directory)
-        raise HTTPException(status_code=422, detail=exc.user_message)
+        raise HTTPException(status_code=422, detail=exc.user_message) from exc
 
     log.info("Uploaded %s (%d bytes) as %s", original_name, size, upload_id)
     return UploadResponse(
@@ -116,7 +118,6 @@ async def upload_media(request: Request, file: UploadFile = File(...)) -> Upload
 
 @router.post("/pick", response_model=PickResponse)
 async def pick_files(request: Request) -> PickResponse:
-    paths = get_paths(request)
     selected = await asyncio.to_thread(
         pick_files_native, "Select lecture video or audio files"
     )
@@ -152,7 +153,7 @@ async def probe_path(request: Request, body: ProbeRequest) -> dict:
     try:
         media_info = await asyncio.to_thread(media_service.probe_media, path)
     except AppError as exc:
-        raise HTTPException(status_code=422, detail=exc.user_message)
+        raise HTTPException(status_code=422, detail=exc.user_message) from exc
     return media_info.model_dump(mode="json")
 
 

@@ -59,7 +59,7 @@ def test_long_continuous_sentence_is_split_by_duration():
     for cue in result.cues:
         assert cue.end - cue.start <= 7.0 + 0.31  # padding bounded by 0.3
     # chronological and non-overlapping
-    for previous, current in zip(result.cues, result.cues[1:]):
+    for previous, current in zip(result.cues, result.cues[1:], strict=False):
         assert previous.end <= current.start + 1e-9
 
 
@@ -203,7 +203,7 @@ def test_malformed_and_overlapping_words_are_repaired():
     ]
     result = segment_words(words)
     assert result.cues, "expected cues from the valid words"
-    for previous, current in zip(result.cues, result.cues[1:]):
+    for previous, current in zip(result.cues, result.cues[1:], strict=False):
         assert previous.end <= current.start + 1e-9
     assert any("malformed" in w for w in result.warnings)
     assert any("out-of-range" in w for w in result.warnings)

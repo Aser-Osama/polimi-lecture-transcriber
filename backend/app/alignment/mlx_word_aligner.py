@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-from app.alignment.base import AlignmentProvider, AlignmentResult, NOOP_PROGRESS
+from app.alignment.base import NOOP_PROGRESS, AlignmentProvider, AlignmentResult
 from app.models.result import AlignedWord
 from app.providers.base import CancellationToken, ProgressCallback, RawTranscription
 

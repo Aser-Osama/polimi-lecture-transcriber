@@ -13,7 +13,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.models.domain import Job, JobStatus
@@ -61,7 +61,7 @@ class Database:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version == 0:
             conn.executescript(
-                """
+                f"""
                 BEGIN;
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
@@ -80,8 +80,8 @@ class Database:
                     realtime_factor REAL,
                     detected_language TEXT,
                     error TEXT,
-                    outputs_json TEXT NOT NULL DEFAULT '{}',
-                    timings_json TEXT NOT NULL DEFAULT '{}',
+                    outputs_json TEXT NOT NULL DEFAULT '{{}}',
+                    timings_json TEXT NOT NULL DEFAULT '{{}}',
                     archived INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_status_created
@@ -91,10 +91,9 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                PRAGMA user_version = %d;
+                PRAGMA user_version = {DB_SCHEMA_VERSION};
                 COMMIT;
                 """
-                % DB_SCHEMA_VERSION
             )
         elif version > DB_SCHEMA_VERSION:
             raise RuntimeError(
@@ -208,7 +207,7 @@ class Database:
 
     def recover_stale_jobs(self) -> list[str]:
         """Mark queued/active jobs as interrupted after an unclean shutdown."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         placeholders = ",".join("?" for _ in _ACTIVE_OR_QUEUED)
         with self._lock, self._connection() as conn:
             rows = conn.execute(

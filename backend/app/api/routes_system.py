@@ -56,7 +56,7 @@ async def events(request: Request) -> StreamingResponse:
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": heartbeat\n\n"
                     continue
                 if event.get("type") == "shutdown":

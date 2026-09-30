@@ -13,6 +13,7 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import multiprocessing as mp
 import queue as std_queue
@@ -164,14 +165,12 @@ class JobManager:
             if done_event is not None:
                 try:
                     await asyncio.wait_for(done_event.wait(), timeout=2.5)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     log.warning("Active job did not stop quickly during shutdown")
         if self._task is not None:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
         worker, self._worker = self._worker, None
         if worker is not None:
@@ -242,7 +241,7 @@ class JobManager:
                 if done_event is not None:
                     try:
                         await asyncio.wait_for(done_event.wait(), timeout=CANCEL_GRACE_SECONDS)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         log.warning(
                             "Worker did not stop within %.0fs; terminating process group",
                             CANCEL_GRACE_SECONDS,
@@ -250,7 +249,7 @@ class JobManager:
                         self._worker.terminate_hard()
                         try:
                             await asyncio.wait_for(done_event.wait(), timeout=10)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             log.error("Job %s did not finalize after forced termination", job_id)
             return self._db.get_job(job_id)
         return job
@@ -373,10 +372,8 @@ class JobManager:
                         terminal = self._apply_event(job, event_task.result())
                     else:
                         event_task.cancel()
-                        try:
+                        with contextlib.suppress(asyncio.CancelledError):
                             await event_task
-                        except asyncio.CancelledError:
-                            pass
                         # give in-flight events a moment to arrive, then drain
                         await asyncio.sleep(0.25)
                         while True:
@@ -393,11 +390,9 @@ class JobManager:
                                 terminal = "crashed"
             finally:
                 watcher.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await watcher
-                except asyncio.CancelledError:
-                    pass
-        except Exception as exc:
+        except Exception:
             log.exception("Failed to run job %s", job.id)
             job.error = "The transcription worker could not be started."
             terminal = "crashed"
@@ -509,10 +504,9 @@ class JobManager:
                 None,
             )
             if target is not None:
-                try:
+                # No running loop when called from tests.
+                with contextlib.suppress(RuntimeError):
                     asyncio.get_running_loop().run_in_executor(None, open_in_finder, target)
-                except RuntimeError:  # no running loop (tests)
-                    pass
 
     def _cleanup_temp_source(self, job: Job) -> None:
         if not job.source_is_temporary:
@@ -527,10 +521,8 @@ class JobManager:
             path.unlink(missing_ok=True)
             parent = path.parent
             if parent.is_relative_to(self._paths.temp_dir):
-                try:
+                with contextlib.suppress(OSError):
                     parent.rmdir()
-                except OSError:
-                    pass
             log.info("Deleted temporary upload %s", path)
         except OSError:
             log.exception("Failed to delete temporary upload %s", path)

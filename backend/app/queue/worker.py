@@ -12,6 +12,7 @@ The worker is persistent: it survives between jobs so mlx-whisper's built-in
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import queue as std_queue
@@ -29,10 +30,10 @@ log = logging.getLogger("app.worker")
 
 def worker_entry(paths_dict: dict, cmd_queue, event_queue, provider_options: dict | None = None) -> None:
     """Runs in the child process (must stay a module-level function for spawn)."""
-    try:
-        os.setsid()  # new session/process group so killpg() reaches FFmpeg children
-    except OSError:
-        pass  # already a session leader (e.g. when running in a test thread)
+    # New session/process group so killpg() reaches FFmpeg children; skipping
+    # when already a session leader (e.g. running in a test thread).
+    with contextlib.suppress(OSError):
+        os.setsid()
 
     logging.basicConfig(
         level=logging.INFO,
@@ -142,7 +143,7 @@ def _start_parent_watchdog(stop: threading.Event) -> None:
 
 
 def _execute_job(paths, job: Job, settings: AppSettings, token: CancellationToken, event_queue, options: dict) -> None:
-    from app.services.pipeline import PipelineContext, cleanup_work_dir, run_pipeline
+    from app.services.pipeline import PipelineContext, run_pipeline
     from app.services.settings_store import resolve_output_dir
 
     work_dir = paths.temp_dir / "jobs" / job.id

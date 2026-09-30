@@ -26,10 +26,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.config import AppPaths  # noqa: E402
-from app.models.domain import AppSettings, Job, JobConfig, LanguageChoice  # noqa: E402
-from app.providers.base import CancellationToken  # noqa: E402
-from app.services.pipeline import PipelineContext, run_pipeline  # noqa: E402
+from app.config import AppPaths
+from app.models.domain import AppSettings, Job, JobConfig, LanguageChoice
+from app.providers.base import CancellationToken
+from app.services.pipeline import PipelineContext, run_pipeline
 
 SPEECH = (
     "Good morning. Today we continue the operating systems lecture. "
@@ -187,7 +187,7 @@ def main() -> int:
     started = time.monotonic()
     try:
         outcome = run_pipeline(context)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the CLI reports any failure
         print(f"\nFAILED: {exc}")
         return 1
     wall = time.monotonic() - started

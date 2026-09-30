@@ -267,10 +267,7 @@ def _should_break(
         return True
 
     projected = len(_join(current)) + 1 + len(word.text)
-    if projected > opts.char_budget:
-        return True
-
-    return False
+    return projected > opts.char_budget
 
 
 def _merge_groups(
@@ -289,9 +286,7 @@ def _can_merge(
     if combined_duration > opts.max_cue_duration * opts.merge_duration_slack:
         return False
     combined_chars = len(_join(left)) + 1 + len(_join(right))
-    if combined_chars > opts.char_budget + 12:
-        return False
-    return True
+    return combined_chars <= opts.char_budget + 12
 
 
 def _merge_tiny_groups(
@@ -405,7 +400,7 @@ def _finalize(
 
     cues: list[Cue] = []
     short_flagged = 0
-    for index, ((first, last), (start, end)) in enumerate(zip(spans, padded)):
+    for index, ((first, last), (start, end)) in enumerate(zip(spans, padded, strict=True)):
         cue_words = words[first:last]
         lines = _wrap_words(cue_words, opts.max_line_chars)
         if len(lines) > opts.max_lines:

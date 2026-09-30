@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from app.models.domain import (
-    AppSettings,
     Job,
     JobConfig,
     JobStatus,
@@ -17,7 +16,6 @@ from app.models.domain import (
 from app.queue import manager as manager_module
 from tests.helpers import (
     DeadWorkerHandle,
-    InProcessWorkerHandle,
     make_queue_env,
     wait_for_status,
 )
@@ -125,7 +123,6 @@ async def test_retry_failed_job_after_source_returns(env, sine_wav, tmp_path):
     source = tmp_path / "temporary.mp4"
     shutil.copy(sine_wav, source)
     job = make_job(env.paths, source)
-    broken = make_job(env.paths, sine_wav)
     # First attempt: corrupted source file
     source.write_bytes(b"not media")
     await env.manager.enqueue(job)

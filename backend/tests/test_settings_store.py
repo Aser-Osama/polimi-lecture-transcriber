@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.models.domain import AppSettings, LanguageChoice
+from app.models.domain import LanguageChoice
 from app.services.settings_store import SettingsStore
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 log = logging.getLogger(__name__)
@@ -43,8 +44,6 @@ class EventBus:
         """Tell every SSE stream to finish so shutdown never waits on them."""
         log.info("Closing %d open event stream(s)", len(self._subscribers))
         for queue in list(self._subscribers):
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait({"type": "shutdown"})
-            except asyncio.QueueFull:
-                pass
         self._subscribers.clear()

@@ -7,6 +7,7 @@ Binds to 127.0.0.1 only; override with PT_HOST/PT_PORT if needed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -172,10 +173,8 @@ def main() -> None:
         bus = getattr(app.state, "event_bus", None)
         loop = getattr(bus, "_loop", None) if bus is not None else None
         if loop is not None and not loop.is_closed():
-            try:
+            with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(bus.close_all)
-            except RuntimeError:
-                pass
         original_handle_exit(sig, frame)
 
     server.handle_exit = handle_exit  # type: ignore[method-assign]

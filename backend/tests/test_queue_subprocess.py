@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-
-import pytest
 
 from app.models.domain import Job, JobConfig, JobStatus, ProviderName
 from app.queue import manager as manager_module

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.models.domain import (
-    AppSettings,
     Job,
     JobConfig,
     JobStatus,
@@ -19,7 +18,7 @@ def make_job(job_id: str = "job1", status: JobStatus = JobStatus.QUEUED, created
         size_bytes=123,
         config=JobConfig(),
         status=status,
-        created_at=datetime.now(timezone.utc) + timedelta(seconds=created_offset),
+        created_at=datetime.now(UTC) + timedelta(seconds=created_offset),
     )
     return job
 
@@ -46,7 +45,7 @@ def test_update_transitions(database):
     job = make_job()
     database.insert_job(job)
     job.status = JobStatus.TRANSCRIBING
-    job.started_at = datetime.now(timezone.utc)
+    job.started_at = datetime.now(UTC)
     database.update_job(job)
     loaded = database.get_job("job1")
     assert loaded.status == JobStatus.TRANSCRIBING

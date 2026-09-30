@@ -27,7 +27,7 @@ def resolve_output_dir(settings: AppSettings, paths: AppPaths) -> Path:
 
 
 class SettingsStore:
-    def __init__(self, database: "Database"):
+    def __init__(self, database: Database):
         self._db = database
         self._lock = threading.RLock()
         self._cached: AppSettings | None = None
