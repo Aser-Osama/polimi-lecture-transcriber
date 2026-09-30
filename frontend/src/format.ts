@@ -2,12 +2,13 @@ import type { JobStatus } from "./types";
 
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return "--";
-  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1000) return `${bytes} B`;
+  // Decimal units to match Hugging Face download sizes shown in the catalog.
   const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
+  let value = bytes / 1000;
   let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
     unit += 1;
   }
   const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
