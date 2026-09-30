@@ -122,9 +122,22 @@ def worker_entry(paths_dict: dict, cmd_queue, event_queue, provider_options: dic
             )
         finally:
             cancel_holder["token"] = None
+            _release_mlx_cache()
 
     reader.join(timeout=1)
     event_queue.put({"type": "bye", "pid": os.getpid()})
+
+
+def _release_mlx_cache() -> None:
+    """Return transient MLX/Metal buffers to the OS between jobs."""
+    import sys
+
+    if "mlx.core" not in sys.modules:
+        return  # provider never used MLX in this worker
+    import mlx.core as mx
+
+    with contextlib.suppress(Exception):
+        mx.clear_cache()
 
 
 def _start_parent_watchdog(stop: threading.Event) -> None:

@@ -18,6 +18,7 @@ from tests.helpers import (
     DeadWorkerHandle,
     make_queue_env,
     wait_for_status,
+    wait_until,
 )
 
 
@@ -213,6 +214,49 @@ async def test_force_kill_when_uninterruptible(paths, sine_wav, monkeypatch):
         )
         assert completed.outputs
         assert len(environment.factory_calls) == 2
+    finally:
+        await environment.manager.stop()
+
+
+async def test_idle_worker_exits_and_releases_memory(paths, sine_wav, monkeypatch):
+    monkeypatch.setattr(manager_module, "WORKER_IDLE_SECONDS", 0.3)
+    environment = make_queue_env(paths, provider_options={"fake_delay": 0.0})
+    await environment.manager.start()
+    try:
+        first = make_job(paths, sine_wav)
+        await environment.manager.enqueue(first)
+        await wait_for_status(environment.db, first.id, {JobStatus.COMPLETED}, timeout=30)
+        await wait_until(
+            lambda: environment.manager._worker is None,
+            timeout=15,
+            what="idle worker shutdown",
+        )
+        assert environment.handles[0].is_alive() is False
+        # A new job is processed by a fresh worker.
+        second = make_job(paths, sine_wav)
+        await environment.manager.enqueue(second)
+        completed = await wait_for_status(
+            environment.db, second.id, {JobStatus.COMPLETED}, timeout=30
+        )
+        assert completed.outputs
+        assert len(environment.factory_calls) == 2
+    finally:
+        await environment.manager.stop()
+
+
+async def test_batch_keeps_worker_during_idle_gap(paths, sine_wav, monkeypatch):
+    monkeypatch.setattr(manager_module, "WORKER_IDLE_SECONDS", 1.0)
+    environment = make_queue_env(paths, provider_options={"fake_delay": 0.0})
+    await environment.manager.start()
+    try:
+        first = make_job(paths, sine_wav)
+        second = make_job(paths, sine_wav)
+        await environment.manager.enqueue(first)
+        await wait_for_status(environment.db, first.id, {JobStatus.COMPLETED}, timeout=30)
+        # Enqueue the next job well within the idle window; the worker must stay.
+        await environment.manager.enqueue(second)
+        await wait_for_status(environment.db, second.id, {JobStatus.COMPLETED}, timeout=30)
+        assert len(environment.factory_calls) == 1
     finally:
         await environment.manager.stop()
 

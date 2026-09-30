@@ -147,3 +147,12 @@ async def wait_for_path(path: Path, timeout: float = 10.0) -> None:
             return
         await asyncio.sleep(0.05)
     raise AssertionError(f"{path} was not created")
+
+
+async def wait_until(predicate, timeout: float = 10.0, what: str = "condition") -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"{what} was not met within {timeout}s")

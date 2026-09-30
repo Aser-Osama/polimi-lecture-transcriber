@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import logging
 import multiprocessing as mp
+import os
 import queue as std_queue
 import signal
 import threading
@@ -43,6 +44,9 @@ log = logging.getLogger(__name__)
 
 CANCEL_GRACE_SECONDS = 5.0
 WORKER_SWEEP_INTERVAL = 0.3
+# Keep the loaded model while a batch is running, but exit the worker (and
+# release its unified memory) when no work has arrived for this long.
+WORKER_IDLE_SECONDS = float(os.environ.get("PT_WORKER_IDLE_SECONDS", "60"))
 
 _STAGE_TO_STATUS = {
     "preparing": JobStatus.PREPARING,
@@ -312,7 +316,10 @@ class JobManager:
                 job = self._db.find_next_queued()
                 if job is None:
                     assert self._wake is not None
-                    await self._wake.wait()
+                    if self._worker is not None:
+                        await self._wait_idle_or_shutdown()
+                    else:
+                        await self._wake.wait()
                     self._wake.clear()
                     continue
                 await self._run_job(job)
@@ -321,6 +328,22 @@ class JobManager:
             except Exception:
                 log.exception("Dispatcher error")
                 await asyncio.sleep(1)
+
+    async def _wait_idle_or_shutdown(self) -> None:
+        """Wait for new work; if none arrives, exit the worker and free RAM."""
+        assert self._wake is not None
+        try:
+            await asyncio.wait_for(self._wake.wait(), timeout=WORKER_IDLE_SECONDS)
+            return
+        except TimeoutError:
+            pass
+        worker, self._worker = self._worker, None
+        if worker is not None:
+            log.info(
+                "Worker idle for %.0fs; shutting it down to release model memory",
+                WORKER_IDLE_SECONDS,
+            )
+            await asyncio.to_thread(worker.shutdown)
 
     def _ensure_worker(self) -> WorkerHandle:
         if self._worker is None or not self._worker.is_alive():

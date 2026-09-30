@@ -70,6 +70,15 @@ downloaded ahead of time from **Settings → Models** (real byte-level progress)
 can be revealed in Finder. Batch jobs reuse the loaded model in the same worker process via
 mlx-whisper's built-in `ModelHolder` cache; switching models replaces it (one model in memory).
 
+### Memory behavior
+
+The worker process keeps the model loaded while you are batching, so consecutive lectures do
+not pay the load time again. When no work has been queued for 60 seconds
+(`PT_WORKER_IDLE_SECONDS`), the worker exits and **all** of its unified memory is returned to
+macOS — including MLX's Metal buffer cache and the model weights (~3 GB for Large V3). The
+next job simply starts a fresh worker and reloads the model from the cache in a few seconds.
+Transient MLX buffers are also released after every job.
+
 ## Supported media
 
 MP4, MOV, MKV, WEBM, M4V, MP3, M4A, AAC, WAV, FLAC, OGG/Opus, AIFF, MPEG/TS, WMA.
@@ -213,6 +222,9 @@ fake provider), `HF_HOME` (model cache override).
   clear message; transcripts and temp audio need roughly 30 MB per hour of 16 kHz PCM16 audio
   plus whatever the model download requires.
 - **A job shows "Interrupted"** — the app closed while it was running. Click Retry.
+- **Memory stays high right after a job** — expected while the app is batching: the model stays
+  warm for the next job. It is released automatically after 60 s without queued work; the next
+  job reloads it from the local cache.
 - **Where are the details?** — `~/Library/Logs/Polimi Lecture Transcriber/app.log`
   (Settings → Reveal logs).
 
