@@ -153,6 +153,22 @@ def test_pipeline_cancellation_cleans_up(paths: AppPaths, sine_wav: Path):
 
 
 @requires_ffmpeg
+def test_pipeline_reports_transcription_fractions(paths: AppPaths, sine_wav: Path):
+    events: list[tuple[str, str | None, float | None]] = []
+    ctx = make_context(paths, sine_wav)
+    ctx.progress = lambda stage, message=None, fraction=None: events.append(
+        (stage, message, fraction)
+    )
+    run_pipeline(ctx)
+    fractions = [
+        fraction for stage, _, fraction in events if stage == "transcribing" and fraction is not None
+    ]
+    assert fractions, "expected transcription progress fractions"
+    assert fractions[-1] == 1.0
+    assert fractions == sorted(fractions)
+
+
+@requires_ffmpeg
 def test_pipeline_empty_media_directory_created(paths: AppPaths, sine_wav: Path):
     ctx = make_context(paths, sine_wav, options={"fake_media_duration": 4.0})
     outcome = run_pipeline(ctx)

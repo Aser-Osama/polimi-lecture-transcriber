@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { ConnectionState, Job, ModelDownloadState } from "../types";
+import type { ConnectionState, Job, JobStatus, ModelDownloadState } from "../types";
+
+export interface StageFraction {
+  status: JobStatus;
+  fraction: number | null;
+}
 
 interface StreamEvent {
   type: string;
@@ -17,7 +22,7 @@ interface StreamEvent {
 export function useJobs() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [fractions, setFractions] = useState<Record<string, number>>({});
+  const [fractions, setFractions] = useState<Record<string, StageFraction>>({});
   const [modelDownloads, setModelDownloads] = useState<Record<string, ModelDownloadState>>({});
   const [lastEvent, setLastEvent] = useState<StreamEvent | null>(null);
   const reconnectCount = useRef(0);
@@ -59,9 +64,15 @@ export function useJobs() {
               next[index] = incoming;
               return next;
             });
-            if (event.fraction !== undefined) {
-              setFractions((current) => ({ ...current, [incoming.id]: event.fraction! }));
-            }
+            // Fractions are only valid for the status they were reported for;
+            // a stage change without a fraction resets the bar.
+            setFractions((current) => ({
+              ...current,
+              [incoming.id]: {
+                status: incoming.status,
+                fraction: event.fraction ?? null,
+              },
+            }));
           }
           break;
         case "job_removed":

@@ -54,13 +54,20 @@ class CancellationToken:
 
 
 class ProgressCallback:
-    """Callable reporting a stage transition: (stage, message|None)."""
+    """Callable reporting a stage transition.
 
-    def __call__(self, stage: str, message: str | None = None) -> None:
+    ``fraction`` is an optional honest sub-progress value in [0, 1] within the
+    stage (e.g. byte progress while downloading a model, processed-audio
+    fraction while transcribing). ``None`` means the stage is indeterminate.
+    """
+
+    def __call__(
+        self, stage: str, message: str | None = None, fraction: float | None = None
+    ) -> None:
         raise NotImplementedError
 
 
-def noop_progress(stage: str, message: str | None = None) -> None:
+def noop_progress(stage: str, message: str | None = None, fraction: float | None = None) -> None:
     pass
 
 

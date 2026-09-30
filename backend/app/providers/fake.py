@@ -6,6 +6,7 @@ to be downloaded or run. It honors cancellation between segments.
 
 from __future__ import annotations
 
+import math
 import time
 
 from app.core.errors import TranscriptionError
@@ -61,6 +62,7 @@ class FakeProvider(TranscriptionProvider):
         segments: list[RawSegment] = []
         segment_span = 4.0
         word_count = 8
+        total_segments = max(1, math.ceil(total_duration / segment_span))
         cursor = 0.0
         segment_id = 0
         while cursor < total_duration:
@@ -89,6 +91,7 @@ class FakeProvider(TranscriptionProvider):
             )
             segment_id += 1
             cursor = end
+            progress("transcribing", None, min(1.0, segment_id / total_segments))
             _sleep_interruptible(delay, cancel)
 
         text = " ".join(s.text for s in segments)

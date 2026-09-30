@@ -137,13 +137,15 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
 
     stage_marks: dict[str, float] = {}
 
-    def provider_progress(stage: str, message: str | None = None) -> None:
+    def provider_progress(
+        stage: str, message: str | None = None, fraction: float | None = None
+    ) -> None:
         now = time.monotonic()
         if stage == "loading_model":
             stage_marks["model_start"] = now
         elif stage == "transcribing" and "model_start" in stage_marks:
             timings.model_load = now - stage_marks.pop("model_start")
-        ctx.progress(stage, message)
+        ctx.progress(stage, message, fraction)
 
     transcription: RawTranscription = provider.transcribe_sync(
         request, provider_progress, cancel

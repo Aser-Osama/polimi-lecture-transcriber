@@ -7,6 +7,7 @@ import {
   LANGUAGE_LABELS,
   STATUS_LABELS,
 } from "../format";
+import type { StageFraction } from "../hooks/useJobs";
 import { useNow } from "../hooks/useNow";
 import { ACTIVE_STATUSES, type Job, type ModelInfo } from "../types";
 import { StatusChip } from "./StatusChip";
@@ -25,7 +26,7 @@ export interface JobActionHandlers {
 
 interface Props extends JobActionHandlers {
   jobs: Job[];
-  fractions: Record<string, number>;
+  fractions: Record<string, StageFraction>;
   models: ModelInfo[];
   connection: string;
 }
@@ -86,7 +87,7 @@ function JobRow({
   onReveal,
   onRegenerate,
   onDeleteHistory,
-}: { job: Job; fraction?: number; models: ModelInfo[] } & JobActionHandlers) {
+}: { job: Job; fraction?: StageFraction; models: ModelInfo[] } & JobActionHandlers) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isActive = ACTIVE_STATUSES.includes(job.status);
   const now = useNow(isActive);
@@ -94,14 +95,25 @@ function JobRow({
     models.find((model) => model.key === job.config.model_key)?.display_name ??
     job.config.model_key;
 
-  const elapsed =
-    isActive && job.started_at
-      ? formatDuration((now - new Date(job.started_at).getTime()) / 1000)
-      : null;
+  const startedMs = job.started_at ? new Date(job.started_at).getTime() : null;
+  const elapsedSeconds = isActive && startedMs ? (now - startedMs) / 1000 : null;
+  const elapsed = elapsedSeconds !== null ? formatDuration(elapsedSeconds) : null;
 
+  // A fraction is only meaningful for the status it was reported for.
   const determinate =
-    job.status === "extracting_audio" && fraction !== undefined && fraction > 0
-      ? fraction
+    fraction && fraction.status === job.status && fraction.fraction !== null
+      ? fraction.fraction
+      : null;
+  const percent = determinate !== null ? Math.round(determinate * 100) : null;
+  const eta =
+    determinate !== null &&
+    determinate >= 0.05 &&
+    determinate < 0.95 &&
+    elapsedSeconds !== null &&
+    elapsedSeconds > 5
+      ? formatDuration(
+          Math.max(1, Math.round((elapsedSeconds * (1 - determinate)) / determinate)),
+        )
       : null;
 
   return (
@@ -133,17 +145,25 @@ function JobRow({
           )}
         </div>
         {(isActive || job.status === "queued") && (
-          <div className="job-progress" role="progressbar" aria-label={STATUS_LABELS[job.status]}>
+          <div
+            className="job-progress"
+            role="progressbar"
+            aria-label={STATUS_LABELS[job.status]}
+            aria-valuemin={determinate !== null ? 0 : undefined}
+            aria-valuemax={determinate !== null ? 100 : undefined}
+            aria-valuenow={percent ?? undefined}
+          >
             {determinate !== null ? (
               <div className="progress-track">
-                <div className="progress-fill" style={{ width: `${Math.round(determinate * 100)}%` }} />
+                <div className="progress-fill" style={{ width: `${percent}%` }} />
               </div>
             ) : (
               isActive && <div className="progress-track indeterminate"><div className="progress-fill" /></div>
             )}
             <span className="progress-label">
               {job.status_message ?? STATUS_LABELS[job.status]}
-              {determinate !== null ? ` ${Math.round(determinate * 100)}%` : ""}
+              {percent !== null ? ` ${percent}%` : ""}
+              {eta ? ` · ~${eta} left` : ""}
             </span>
           </div>
         )}

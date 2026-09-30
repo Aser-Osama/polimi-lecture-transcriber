@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.core.errors import ModelLoadError, TranscriptionError
+from app.core.errors import CancelledError, ModelLoadError, TranscriptionError
 from app.models.result import RawSegment, RawWord
 from app.providers.base import (
     CancellationToken,
@@ -28,8 +28,9 @@ from app.providers.base import (
     TranscriptionProvider,
     TranscriptionRequest,
 )
+from app.providers.tqdm_progress import hook_tqdm
 from app.services.audioio import load_wav_float32
-from app.services.model_cache import is_model_cached
+from app.services.model_cache import download_model, is_model_cached
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +60,14 @@ class LocalMLXProvider(TranscriptionProvider):
         if is_model_cached(request.model_repo):
             progress("loading_model", "Loading model from cache")
         else:
+            # Download first so the UI gets real byte-level progress instead of
+            # an indeterminate "downloading..." state.
             progress("loading_model", "Downloading model (first use) - this can take a while")
+            download_model(
+                request.model_repo,
+                progress=lambda fraction, message: progress("loading_model", message, fraction),
+                cancel=cancel,
+            )
 
         # Load (or reuse from cache) the model explicitly so that model-load
         # time is measurable and separate from inference time.
@@ -74,6 +82,10 @@ class LocalMLXProvider(TranscriptionProvider):
         cancel.raise_if_cancelled()
         progress("transcribing", None)
 
+        def report_audio_fraction(fraction: float) -> None:
+            cancel.raise_if_cancelled()
+            progress("transcribing", None, fraction)
+
         try:
             audio = load_wav_float32(request.audio_path)
         except Exception as exc:
@@ -84,15 +96,20 @@ class LocalMLXProvider(TranscriptionProvider):
 
         started = time.monotonic()
         try:
-            result = mlx_whisper.transcribe(
-                audio,
-                path_or_hf_repo=request.model_repo,
-                language=request.language,
-                initial_prompt=request.initial_prompt,
-                word_timestamps=True,
-                verbose=None,
-                condition_on_previous_text=True,
-            )
+            # mlx-whisper's own tqdm counts processed mel frames; forward that
+            # as genuine progress for this stage.
+            with hook_tqdm(report_audio_fraction):
+                result = mlx_whisper.transcribe(
+                    audio,
+                    path_or_hf_repo=request.model_repo,
+                    language=request.language,
+                    initial_prompt=request.initial_prompt,
+                    word_timestamps=True,
+                    verbose=None,
+                    condition_on_previous_text=True,
+                )
+        except CancelledError:
+            raise
         except Exception as exc:
             log.exception("mlx_whisper.transcribe failed")
             raise TranscriptionError(

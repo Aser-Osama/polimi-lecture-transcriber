@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 from app.models.result import AlignedWord
 from app.providers.base import CancellationToken, ProgressCallback, RawTranscription
 
-NOOP_PROGRESS: ProgressCallback = lambda stage, message=None: None  # noqa: E731
+
+def NOOP_PROGRESS(stage: str, message: str | None = None, fraction: float | None = None) -> None:
+    pass
 
 
 @dataclass

@@ -61,6 +61,25 @@ async def test_sequential_completion_order(env, sine_wav):
         assert job.realtime_factor is not None
 
 
+async def test_transcription_fraction_reaches_event_bus(paths, sine_wav):
+    environment = make_queue_env(paths, provider_options={"fake_delay": 0.05})
+    await environment.manager.start()
+    queue = environment.bus.subscribe()
+    try:
+        job = make_job(paths, sine_wav)
+        await environment.manager.enqueue(job)
+        await wait_for_status(environment.db, job.id, {JobStatus.COMPLETED})
+        fractions: list[float] = []
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event.get("type") == "job" and event.get("fraction") is not None:
+                fractions.append(event["fraction"])
+        assert fractions, "expected fraction events on the bus"
+        assert fractions[-1] == 1.0
+    finally:
+        await environment.manager.stop()
+
+
 async def test_worker_is_reused_between_jobs(env, sine_wav):
     first = make_job(env.paths, sine_wav)
     second = make_job(env.paths, sine_wav)
