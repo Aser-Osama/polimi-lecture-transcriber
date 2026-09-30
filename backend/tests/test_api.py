@@ -152,7 +152,7 @@ async def test_full_job_lifecycle(client, sine_wav, tmp_path):
     assert preview["media_url"].endswith("/media")
 
     payload = json.loads(Path(done["outputs"]["json"]).read_text())
-    assert payload["glossary"] == "NUMA, TLB"
+    assert payload["glossary"].splitlines() == ["NUMA", "TLB"]
 
 
 @requires_ffmpeg

@@ -1,14 +1,15 @@
-"""Course vocabulary handling for the Whisper initial prompt.
+"""Context/terminology handling for ASR prompts.
 
-The glossary is cleaned (trimmed, de-duplicated, empty entries removed), given
+Context text is cleaned (trimmed, de-duplicated, empty entries removed), given
 a short natural-language frame and truncated at a term boundary so it always
-stays within Whisper's 224-token prompt budget.
+stays within Whisper's 224-token prompt budget. The same cleaned term list is
+what providers with non-prompt context support (e.g. keyword biasing) receive.
 """
 
 from __future__ import annotations
 
 MAX_PROMPT_CHARS = 600
-_PROMPT_PREFIX = "Politecnico di Milano university lecture. Technical terms: "
+PROMPT_PREFIX = "Relevant names and technical terms: "
 
 
 def clean_glossary_terms(raw: str) -> list[str]:
@@ -31,16 +32,25 @@ def clean_glossary_terms(raw: str) -> list[str]:
     return terms
 
 
-def build_initial_prompt(raw: str, max_chars: int = MAX_PROMPT_CHARS) -> str | None:
-    terms = clean_glossary_terms(raw)
-    if not terms:
+def build_initial_prompt_from_terms(
+    terms: list[str], max_chars: int = MAX_PROMPT_CHARS
+) -> str | None:
+    cleaned = []
+    seen: set[str] = set()
+    for term in terms:
+        normalized = " ".join(term.split())
+        if not normalized or normalized.casefold() in seen:
+            continue
+        seen.add(normalized.casefold())
+        cleaned.append(normalized)
+    if not cleaned:
         return None
-    budget = max_chars - len(_PROMPT_PREFIX)
+    budget = max_chars - len(PROMPT_PREFIX)
     if budget <= 0:
         raise ValueError("max_chars too small for prompt prefix")
     kept: list[str] = []
     length = 0
-    for term in terms:
+    for term in cleaned:
         addition = len(term) + (2 if kept else 0)
         if length + addition > budget:
             break
@@ -48,7 +58,11 @@ def build_initial_prompt(raw: str, max_chars: int = MAX_PROMPT_CHARS) -> str | N
         length += addition
     if not kept:
         return None
-    return _PROMPT_PREFIX + ", ".join(kept)
+    return PROMPT_PREFIX + ", ".join(kept)
+
+
+def build_initial_prompt(raw: str, max_chars: int = MAX_PROMPT_CHARS) -> str | None:
+    return build_initial_prompt_from_terms(clean_glossary_terms(raw), max_chars)
 
 
 def normalized_glossary(raw: str) -> str:

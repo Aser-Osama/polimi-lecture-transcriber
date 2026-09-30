@@ -132,6 +132,8 @@ class OpenRouterProvider(TranscriptionProvider):
         language: str | None,
         api_key: str,
         verbose: bool,
+        context_terms: list[str] | None = None,
+        context_mode: str = "none",
     ) -> tuple[dict, bool]:
         """POST one chunk. Returns (payload, verbose_still_supported)."""
         audio_b64 = base64.b64encode(chunk.path.read_bytes()).decode("ascii")
@@ -144,6 +146,12 @@ class OpenRouterProvider(TranscriptionProvider):
         if verbose:
             body["response_format"] = "verbose_json"
             body["timestamp_granularities"] = ["segment", "word"]
+        if context_terms and context_mode == "phrase_list":
+            # MAI-Transcribe keyword biasing (provider-specific option).
+            provider = body.setdefault("provider", {})
+            options = provider.setdefault("options", {})
+            azure = options.setdefault("azure", {})
+            azure["phraseList"] = {"phrases": context_terms[:100]}
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -178,7 +186,16 @@ class OpenRouterProvider(TranscriptionProvider):
                 )
             if response.status_code == 400 and verbose:
                 # Provider cannot do structured output; fall back to plain JSON.
-                return self._post_chunk(client, model_id, chunk, language, api_key, verbose=False)
+                return self._post_chunk(
+                    client,
+                    model_id,
+                    chunk,
+                    language,
+                    api_key,
+                    verbose=False,
+                    context_terms=context_terms,
+                    context_mode=context_mode,
+                )
             if response.status_code in _RETRY_STATUSES and attempt < _MAX_ATTEMPTS - 1:
                 time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)])
                 continue
@@ -292,6 +309,17 @@ class OpenRouterProvider(TranscriptionProvider):
         text_only_chunks = 0
         started = time.monotonic()
 
+        context_terms = [term for term in (request.context_terms or []) if term.strip()][:100]
+        context_applied = "none"
+        if context_terms:
+            if spec.context == "phrase_list":
+                context_applied = "phrase_list"
+            else:
+                warnings.append(
+                    f"{spec.display_name} does not support context biasing; "
+                    f"{len(context_terms)} context term(s) were not sent."
+                )
+
         def run(client) -> None:
             nonlocal text_only_chunks
             for position, chunk in enumerate(chunks, start=1):
@@ -303,7 +331,14 @@ class OpenRouterProvider(TranscriptionProvider):
                     fraction=(position - 1) / len(chunks),
                 )
                 payload, verbose_ok = self._post_chunk(
-                    client, spec.model_id, chunk, request.language, api_key, use_verbose
+                    client,
+                    spec.model_id,
+                    chunk,
+                    request.language,
+                    api_key,
+                    use_verbose,
+                    context_terms=context_terms,
+                    context_mode=spec.context,
                 )
                 if use_verbose and not verbose_ok:
                     self._verbose_supported = False
@@ -352,6 +387,8 @@ class OpenRouterProvider(TranscriptionProvider):
             "native_segments": bool(segments),
             "cost_usd": round(usage.get("cost", 0.0), 6),
             "audio_seconds": round(usage.get("seconds", sum(c.duration for c in chunks)), 2),
+            "context_applied": context_applied,
+            "context_terms": len(context_terms),
         }
         # Keep reasoning about joins consistent: join chunk texts with spaces.
         full_text = " ".join(texts)

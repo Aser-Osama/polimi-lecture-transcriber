@@ -22,6 +22,7 @@ from app.api import (
     routes_jobs,
     routes_media,
     routes_models,
+    routes_projects,
     routes_settings,
     routes_system,
 )
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_jobs.router)
     app.include_router(routes_settings.router)
     app.include_router(routes_models.router)
+    app.include_router(routes_projects.router)
 
     dist_dir = PROJECT_ROOT / "frontend" / "dist"
     if (dist_dir / "index.html").is_file():

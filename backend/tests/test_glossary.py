@@ -1,4 +1,9 @@
-from app.services.glossary import build_initial_prompt, clean_glossary_terms, normalized_glossary
+from app.services.glossary import (
+    PROMPT_PREFIX,
+    build_initial_prompt,
+    clean_glossary_terms,
+    normalized_glossary,
+)
 
 
 def test_parses_lines_and_commas():
@@ -41,7 +46,7 @@ def test_prompt_respects_max_chars():
 
 def test_prompt_truncation_keeps_whole_terms():
     raw = "term_one, term_two, term_three"
-    prompt = build_initial_prompt(raw, max_chars=len("Politecnico di Milano university lecture. Technical terms: ") + 15)
+    prompt = build_initial_prompt(raw, max_chars=len(PROMPT_PREFIX) + 15)
     assert prompt is not None
     assert "term_one" in prompt
     assert "term_three" not in prompt

@@ -108,7 +108,7 @@ def validate_outputs(outputs: dict, result_json: dict) -> list[str]:
         problems.append("no word-level timestamps in JSON result")
     if not result_json.get("cues"):
         problems.append("no cues in JSON result")
-    if result_json.get("schema_version") != 2:
+    if result_json.get("schema_version") != 3:
         problems.append("unexpected schema_version")
     return problems
 

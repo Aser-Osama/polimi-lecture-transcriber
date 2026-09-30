@@ -1,8 +1,21 @@
 import { useState } from "react";
-import { formatBytes } from "../format";
-import type { LanguageChoice, ModelInfo, OpenRouterModel, ProviderName } from "../types";
+import { formatBytes, termCount } from "../format";
+import type {
+  LanguageChoice,
+  ModelInfo,
+  OpenRouterModel,
+  Project,
+  ProviderName,
+} from "../types";
 
 export type BackendChoice = Extract<ProviderName, "local_mlx" | "openrouter">;
+
+function countTerms(text: string): number {
+  return text
+    .split(/[\n,;]/)
+    .map((term) => term.trim())
+    .filter(Boolean).length;
+}
 
 interface Props {
   backend: BackendChoice;
@@ -10,6 +23,9 @@ interface Props {
   modelKey: string;
   openrouterModel: string;
   glossary: string;
+  globalContext: string;
+  projects: Project[];
+  selectedProjectId: string | null;
   models: ModelInfo[];
   openrouterModels: OpenRouterModel[];
   hasOpenRouterKey: boolean;
@@ -25,6 +41,8 @@ interface Props {
   onGlossaryChange: (value: string) => void;
   onAlignChange: (value: boolean) => void;
   onGoToSettings: () => void;
+  onProjectChange: (projectId: string | null) => void;
+  onCreateProject: (name: string, context: string) => Promise<void>;
 }
 
 export function OptionsBar({
@@ -33,6 +51,9 @@ export function OptionsBar({
   modelKey,
   openrouterModel,
   glossary,
+  globalContext,
+  projects,
+  selectedProjectId,
   models,
   openrouterModels,
   hasOpenRouterKey,
@@ -48,9 +69,18 @@ export function OptionsBar({
   onGlossaryChange,
   onAlignChange,
   onGoToSettings,
+  onProjectChange,
+  onCreateProject,
 }: Props) {
   const [glossaryOpen, setGlossaryOpen] = useState(glossary.trim().length > 0);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectContext, setNewProjectContext] = useState("");
+  const [creatingBusy, setCreatingBusy] = useState(false);
   const selectedModel = models.find((model) => model.key === modelKey);
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const globalTerms = countTerms(globalContext);
+  const projectTerms = selectedProject ? countTerms(selectedProject.context) : 0;
 
   return (
     <section className="panel options-panel" aria-label="Transcription options">
@@ -181,6 +211,76 @@ export function OptionsBar({
         </p>
       </div>
 
+      <div className="field project-field">
+        <label htmlFor="project-select">Course / Project (optional)</label>
+        <div className="inline-field">
+          <select
+            id="project-select"
+            value={selectedProjectId ?? ""}
+            disabled={disabled}
+            onChange={(event) => onProjectChange(event.target.value || null)}
+          >
+            <option value="">No course/project</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn"
+            disabled={disabled}
+            onClick={() => setCreatingProject((open) => !open)}
+          >
+            New...
+          </button>
+        </div>
+        {creatingProject && (
+          <div className="new-project-form">
+            <input
+              type="text"
+              placeholder="Course/project name"
+              value={newProjectName}
+              onChange={(event) => setNewProjectName(event.target.value)}
+            />
+            <textarea
+              rows={3}
+              placeholder={"Recurring terms, acronyms, professor names (optional)\nNUMA\nTLB\nDaniele Cattaneo"}
+              value={newProjectContext}
+              onChange={(event) => setNewProjectContext(event.target.value)}
+            />
+            <div className="button-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={creatingBusy || !newProjectName.trim()}
+                onClick={() => {
+                  setCreatingBusy(true);
+                  onCreateProject(newProjectName.trim(), newProjectContext)
+                    .then(() => {
+                      setCreatingProject(false);
+                      setNewProjectName("");
+                      setNewProjectContext("");
+                    })
+                    .finally(() => setCreatingBusy(false));
+                }}
+              >
+                {creatingBusy ? "Creating..." : "Create"}
+              </button>
+              <button type="button" className="btn" onClick={() => setCreatingProject(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        <p className="field-hint">
+          {selectedProject
+            ? `"${selectedProject.name}" adds ${termCount(projectTerms)} of context to every transcription you start with it selected.`
+            : "Select a course/project to apply its recurring context automatically. Manage them in Settings."}
+        </p>
+      </div>
+
       <div className="field glossary-field">
         <button
           type="button"
@@ -188,11 +288,9 @@ export function OptionsBar({
           aria-expanded={glossaryOpen}
           onClick={() => setGlossaryOpen((open) => !open)}
         >
-          <span>Course vocabulary</span>
+          <span>Context for this transcription (optional)</span>
           <span className="glossary-summary">
-            {glossary.trim()
-              ? `${glossary.split(/[\n,]/).filter((term) => term.trim()).length} terms`
-              : "optional"}
+            {glossary.trim() ? termCount(countTerms(glossary)) : "optional"}
             {glossaryOpen ? " · hide" : " · show"}
           </span>
         </button>
@@ -200,16 +298,19 @@ export function OptionsBar({
           <>
             <textarea
               id="glossary-input"
-              rows={5}
+              rows={4}
               value={glossary}
               disabled={disabled}
-              placeholder={"One term per line or comma-separated:\nNUMA\nTLB\ncache coherence\nCUDA"}
+              placeholder={"One-off topics, guest speakers, unusual terminology\none term per line or comma-separated"}
               onChange={(event) => onGlossaryChange(event.target.value)}
             />
             <p className="field-hint">
+              Merged at transcription time as global ({termCount(globalTerms)} from Settings) + course
+              {selectedProject ? ` (${projectTerms})` : ""} + this file. More specific terms
+              override broader ones.
               {backend === "openrouter"
-                ? "OpenRouter models do not accept prompts, so the vocabulary is ignored by the cloud backend."
-                : "Terms are cleaned, de-duplicated and limited before being sent to Whisper as context."}
+                ? " OpenRouter models that support keyword biasing receive the merged terms; others transcribe without them."
+                : ""}
             </p>
           </>
         )}

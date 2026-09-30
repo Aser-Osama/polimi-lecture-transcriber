@@ -23,6 +23,7 @@ from app.models.domain import (
     ProviderName,
 )
 from app.services import media as media_service
+from app.services.context import resolve_context
 from app.services.outputs import (
     allocate_stem,
     ensure_output_dir,
@@ -54,8 +55,22 @@ async def list_jobs(request: Request, include_archived: bool = True, limit: int 
 async def create_jobs(request: Request, body: CreateJobsRequest) -> dict:
     paths = get_paths(request)
     manager = get_manager(request)
+    db = get_db(request)
     settings = get_settings_store(request).get()
-    glossary = body.glossary if body.glossary is not None else settings.glossary
+
+    project = None
+    if body.project_id:
+        project = await asyncio.to_thread(db.get_project, body.project_id)
+        if project is None:
+            raise HTTPException(status_code=422, detail="Unknown course/project.")
+    per_file_context = (
+        body.per_file_context if body.per_file_context is not None else (body.glossary or "")
+    )
+    resolved = resolve_context(
+        settings.glossary,
+        (project.id, project.name, project.context) if project else None,
+        per_file_context,
+    )
     try:
         config = JobConfig(
             model_key=body.model_key,
@@ -63,7 +78,11 @@ async def create_jobs(request: Request, body: CreateJobsRequest) -> dict:
             provider=body.provider,
             openrouter_model=body.openrouter_model,
             align_with_whisperx=body.align_with_whisperx,
-            glossary=glossary,
+            glossary=resolved.effective,
+            global_context=resolved.global_context,
+            per_file_context=resolved.per_file_context,
+            project_id=resolved.project_id,
+            project_name=resolved.project_name,
             options=body.options,
         )
     except ValidationError as exc:

@@ -96,6 +96,44 @@ def test_delete_job(database):
     assert not database.delete_job("job1")
 
 
+def test_projects_crud(database):
+    from app.models.domain import Project
+
+    project = Project(name="Operating Systems", context="NUMA\nTLB")
+    database.insert_project(project)
+    loaded = database.get_project(project.id)
+    assert loaded is not None and loaded.context == "NUMA\nTLB"
+    loaded.context = "NUMA\nTLB\nMESI"
+    database.update_project(loaded)
+    assert "MESI" in database.get_project(project.id).context
+    assert [p.name for p in database.list_projects()] == ["Operating Systems"]
+    assert database.delete_project(project.id) is True
+    assert database.get_project(project.id) is None
+
+
+def test_migrates_v2_database_to_v3(tmp_path):
+    import sqlite3
+
+    from app.db.database import Database
+    from app.models.domain import Project
+
+    path = tmp_path / "old.db"
+    database = Database(path)
+    database.insert_project(Project(name="temporary"))
+    # Simulate a V2 database: no projects table, user_version 2.
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE projects")
+        conn.execute("PRAGMA user_version = 2")
+    migrated = Database(path)
+    assert migrated.list_projects() == []
+    migrated.insert_project(Project(name="after migration"))
+    assert [p.name for p in migrated.list_projects()] == ["after migration"]
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == DB_SCHEMA_VERSION
+    # jobs data survived
+    assert migrated.get_job("job1") is None  # fresh db had no jobs; table intact
+
+
 def test_settings_kv(database):
     assert database.get_setting("x") is None
     database.set_setting("x", "1")

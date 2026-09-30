@@ -127,7 +127,12 @@ class JobConfig(BaseModel):
     provider: ProviderName = ProviderName.LOCAL_MLX
     openrouter_model: str | None = None
     align_with_whisperx: bool = False
+    # glossary holds the *effective* merged context (global + project + file).
     glossary: str = ""
+    global_context: str = ""
+    per_file_context: str = ""
+    project_id: str | None = None
+    project_name: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("model_key")
@@ -155,6 +160,16 @@ class JobConfig(BaseModel):
         if self.provider == ProviderName.OPENROUTER and not self.openrouter_model:
             self.openrouter_model = DEFAULT_OPENROUTER_MODEL
         return self
+
+
+class Project(BaseModel):
+    """A course/project holding recurring context (terms, names, acronyms)."""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    name: str
+    context: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class Job(BaseModel):

@@ -8,6 +8,7 @@ import type {
   OpenRouterModel,
   PickFile,
   PreviewData,
+  Project,
   UploadResponse,
 } from "../types";
 
@@ -22,10 +23,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
   let response: Response;
   try {
     response = await fetch(path, {
-      headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+      headers: init?.body && !isFormData ? { "Content-Type": "application/json" } : undefined,
       ...init,
     });
   } catch (error) {
@@ -58,6 +61,7 @@ export interface CreateJobOptions {
   provider?: string;
   openrouterModel?: string | null;
   alignWithWhisperx?: boolean;
+  projectId?: string | null;
 }
 
 export const api = {
@@ -101,11 +105,12 @@ export const api = {
         sources: options.sources,
         model_key: options.modelKey,
         language: options.language,
-        glossary: options.glossary ?? null,
+        per_file_context: options.glossary ?? null,
         provider: options.provider ?? "local_mlx",
         openrouter_model: options.openrouterModel ?? null,
         align_with_whisperx: options.alignWithWhisperx ?? false,
-      }),
+        project_id: options.projectId ?? null,
+      } satisfies Record<string, unknown>),
     }),
 
   cancelJob: (id: string) => request<Job>(`/api/jobs/${id}/cancel`, { method: "POST" }),
@@ -131,6 +136,34 @@ export const api = {
   preview: (jobId: string) => request<PreviewData>(`/api/jobs/${jobId}/preview`),
 
   listModels: () => request<{ models: ModelInfo[] }>("/api/models"),
+
+  listProjects: () => request<{ projects: Project[] }>("/api/projects"),
+
+  createProject: (name: string, context = "") =>
+    request<Project>("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name, context }),
+    }),
+
+  updateProject: (id: string, patch: { name?: string; context?: string }) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+
+  deleteProject: (id: string) =>
+    request<{ deleted: boolean }>(`/api/projects/${id}`, { method: "DELETE" }),
+
+  importProjectDocument: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{
+      project: Project;
+      extracted: number;
+      added: string[];
+      text_chars: number;
+    }>(`/api/projects/${id}/import`, { method: "POST", body: form });
+  },
 
   downloadModel: (key: string) =>
     request<{ state: string }>(`/api/models/${key}/download`, { method: "POST" }),

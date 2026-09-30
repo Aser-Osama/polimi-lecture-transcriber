@@ -61,7 +61,19 @@ export interface JobConfig {
   openrouter_model: string | null;
   align_with_whisperx: boolean;
   glossary: string;
+  global_context: string;
+  per_file_context: string;
+  project_id: string | null;
+  project_name: string | null;
   options: Record<string, unknown>;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  context: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface OpenRouterModel {

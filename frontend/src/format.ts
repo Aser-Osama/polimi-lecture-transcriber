@@ -89,6 +89,10 @@ export const LANGUAGE_LABELS: Record<string, string> = {
   auto: "Auto Detect",
 };
 
+export function termCount(n: number): string {
+  return `${n} term${n === 1 ? "" : "s"}`;
+}
+
 export function elapsedSince(iso: string | null | undefined): string {
   if (!iso) return "--";
   const start = new Date(iso).getTime();

@@ -151,6 +151,7 @@ function JobRow({
           )}
           {costUsd !== null && costUsd > 0 && <span>${costUsd.toFixed(4)}</span>}
           {alignmentProvider?.includes("whisperx") && <span>WhisperX aligned</span>}
+          {job.config.project_name && <span>project: {job.config.project_name}</span>}
           {elapsed && <span>{elapsed} elapsed</span>}
           {job.created_at && !job.started_at && (
             <span>added {formatDateTime(job.created_at)}</span>

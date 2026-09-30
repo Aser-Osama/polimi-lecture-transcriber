@@ -45,6 +45,7 @@ class TranscriptionRequest:
     model_repo: str
     language: str | None  # None means auto-detect
     initial_prompt: str | None = None
+    context_terms: list[str] = field(default_factory=list)
     media_duration: float | None = None
     options: dict = field(default_factory=dict)
 

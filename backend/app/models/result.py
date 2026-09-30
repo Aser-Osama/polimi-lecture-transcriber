@@ -52,6 +52,15 @@ class Cue(BaseModel):
     last_word_index: int  # exclusive
 
 
+class ContextInfo(BaseModel):
+    global_context: str = ""
+    project_id: str | None = None
+    project_name: str | None = None
+    per_file_context: str = ""
+    effective: str = ""
+    terms: list[str] = Field(default_factory=list)
+
+
 class StageTimings(BaseModel):
     media_probe: float = 0.0
     audio_prepare: float = 0.0
@@ -98,3 +107,4 @@ class TranscriptResult(BaseModel):
     output_paths: OutputPaths | None = None
     alignment_provider: str | None = None
     provider_meta: dict = Field(default_factory=dict)
+    context: ContextInfo = Field(default_factory=ContextInfo)

@@ -150,6 +150,36 @@ def whisperx_missing(monkeypatch):
 
 
 @requires_ffmpeg
+def test_context_flows_to_prompt_and_result(paths: AppPaths, sine_wav: Path):
+    from app.providers.fake import FakeProvider
+
+    ctx = make_ctx(paths, sine_wav, FakeProvider(), align=False)
+    ctx.job.config.glossary = "NUMA, TLB\nDaniele Cattaneo"
+    ctx.job.config.global_context = "NUMA"
+    ctx.job.config.per_file_context = "Daniele Cattaneo"
+    ctx.job.config.project_name = "OS"
+    outcome = run_pipeline(ctx)
+    payload = json.loads(Path(outcome.outputs["json"]).read_text())
+    assert payload["initial_prompt"] is not None
+    assert "NUMA" in payload["initial_prompt"]
+    assert payload["context"]["terms"] == ["NUMA", "TLB", "Daniele Cattaneo"]
+    assert payload["context"]["project_name"] == "OS"
+    assert payload["context"]["global_context"] == "NUMA"
+    assert payload["context"]["per_file_context"] == "Daniele Cattaneo"
+
+
+@requires_ffmpeg
+def test_no_context_produces_no_prompt(paths: AppPaths, sine_wav: Path):
+    from app.providers.fake import FakeProvider
+
+    ctx = make_ctx(paths, sine_wav, FakeProvider(), align=False)
+    outcome = run_pipeline(ctx)
+    payload = json.loads(Path(outcome.outputs["json"]).read_text())
+    assert payload["initial_prompt"] is None
+    assert payload["context"]["terms"] == []
+
+
+@requires_ffmpeg
 def test_text_only_without_alignment_produces_no_subtitles(paths: AppPaths, sine_wav: Path):
     ctx = make_ctx(paths, sine_wav, TextOnlyProvider("Just some words with no timing."), align=False)
     outcome = run_pipeline(ctx)

@@ -23,6 +23,7 @@ from app.exporters import json_exporter, srt, txt, vtt
 from app.models.domain import AppSettings, Job, ProviderName, utcnow
 from app.models.result import (
     AlignedWord,
+    ContextInfo,
     OutputPaths,
     RawSegment,
     StageTimings,
@@ -39,7 +40,7 @@ from app.providers.base import (
 from app.providers.local_mlx import LocalMLXProvider
 from app.providers.openrouter import segments_from_words
 from app.services import media as media_service
-from app.services.glossary import build_initial_prompt
+from app.services.glossary import build_initial_prompt_from_terms, clean_glossary_terms
 from app.services.outputs import create_output_files, release_unwritten, write_text_atomic
 from app.services.registry import get_model_spec
 from app.services.whisperx import whisperx_status
@@ -149,7 +150,8 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
         model_spec = get_model_spec(job.config.model_key)
         model_repo = model_spec.repo_id
         result_model_key = model_spec.key
-    initial_prompt = build_initial_prompt(job.config.glossary)
+    context_terms = clean_glossary_terms(job.config.glossary)
+    initial_prompt = build_initial_prompt_from_terms(context_terms)
 
     options = {**ctx.provider_options, **job.config.options}
     if media_duration:
@@ -159,6 +161,7 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
         model_repo=model_repo,
         language=job.config.language.whisper_code,
         initial_prompt=initial_prompt,
+        context_terms=context_terms,
         media_duration=media_duration,
         options=options,
     )
@@ -273,6 +276,14 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
             timings=timings,
             provider_meta=provider_meta,
             alignment_provider=alignment_provider_used,
+            context=ContextInfo(
+                global_context=job.config.global_context,
+                project_id=job.config.project_id,
+                project_name=job.config.project_name,
+                per_file_context=job.config.per_file_context,
+                effective=job.config.glossary,
+                terms=context_terms,
+            ),
         )
         result.output_paths = OutputPaths(
             txt=str(output_paths["txt"]),

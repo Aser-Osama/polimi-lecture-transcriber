@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import { formatBytes } from "../format";
+import { formatBytes, termCount } from "../format";
 import type { AlignmentInstallEvent } from "../hooks/useJobs";
 import type {
   AlignmentStatus,
@@ -9,7 +9,9 @@ import type {
   ModelDownloadState,
   ModelInfo,
   OpenRouterModel,
+  Project,
 } from "../types";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { PrivacyNote } from "./PrivacyNote";
 
 interface Props {
@@ -22,10 +24,12 @@ interface Props {
   hasOpenRouterKey: boolean;
   alignmentStatus: AlignmentStatus | null;
   alignmentInstall: AlignmentInstallEvent | null;
+  projects: Project[];
   onSaved: (settings: AppSettings) => void;
   onModelsChanged: () => void;
   onKeyChanged: () => void;
   onAlignmentChanged: () => void;
+  onProjectsChanged: () => void;
   onToast: (message: string, kind?: "info" | "error") => void;
 }
 
@@ -39,16 +43,31 @@ export function SettingsView({
   hasOpenRouterKey,
   alignmentStatus,
   alignmentInstall,
+  projects,
   onSaved,
   onModelsChanged,
   onKeyChanged,
   onAlignmentChanged,
+  onProjectsChanged,
   onToast,
 }: Props) {
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectContext, setNewProjectContext] = useState("");
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editContext, setEditContext] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [importingId, setImportingId] = useState<string | null>(null);
+
+  const countTerms = (text: string) =>
+    text
+      .split(/[\n,;]/)
+      .map((term) => term.trim())
+      .filter(Boolean).length;
 
   useEffect(() => {
     setDraft(settings);
@@ -310,21 +329,196 @@ export function SettingsView({
         </div>
       </section>
 
-      <section className="panel" aria-label="Course vocabulary">
-        <h2 className="panel-title">Course vocabulary</h2>
+      <section className="panel" aria-label="Global context">
+        <h2 className="panel-title">Global context</h2>
         <div className="field">
           <textarea
-            rows={6}
+            rows={5}
             value={draft.glossary}
             onChange={(event) => setDraft({ ...draft, glossary: event.target.value })}
-            placeholder={"One term per line or comma-separated:\nNUMA\nTLB\nMESI\nCUDA"}
+            placeholder={"Persistent names, terminology, language preferences\none term per line or comma-separated"}
           />
           <p className="field-hint">
-            Used as Whisper context at the start of transcription. Saved locally in the app
-            database (future versions will support per-course glossaries).
+            Applies to <strong>every</strong> transcription, on top of any course/project and
+            per-file context. Saved with your settings and merged at transcription time as:
+            global + course/project + current file.
           </p>
         </div>
       </section>
+
+      <section className="panel" aria-label="Courses and projects">
+        <h2 className="panel-title">Courses / Projects</h2>
+        <p className="field-hint">
+          Recurring technical vocabulary, professor names and acronyms for a course, project,
+          meeting series or podcast. Select one in the transcribe view to apply its context
+          automatically. PDF, TXT and Markdown documents can be imported to extract names,
+          acronyms and terminology (no AI, just frequency heuristics — review the result).
+        </p>
+        <ul className="project-list">
+          {projects.map((project) => (
+            <li key={project.id} className="project-card">
+              {editingProjectId === project.id ? (
+                <div className="project-edit">
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(event) => setEditName(event.target.value)}
+                  />
+                  <textarea
+                    rows={4}
+                    value={editContext}
+                    onChange={(event) => setEditContext(event.target.value)}
+                    placeholder="One term per line or comma-separated"
+                  />
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="btn btn-small btn-primary"
+                      onClick={() => {
+                        api
+                          .updateProject(project.id, {
+                            name: editName.trim(),
+                            context: editContext,
+                          })
+                          .then(() => {
+                            setEditingProjectId(null);
+                            onProjectsChanged();
+                            onToast("Course/project updated.");
+                          })
+                          .catch((error: Error) => onToast(error.message, "error"));
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-small"
+                      onClick={() => setEditingProjectId(null)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="project-info">
+                    <span className="project-name">{project.name}</span>
+                    <span className="project-meta">
+                      {termCount(countTerms(project.context))} of context
+                    </span>
+                    {project.context && (
+                      <span className="project-preview">
+                        {project.context.split(/[\n,]/).map((t) => t.trim()).filter(Boolean).slice(0, 8).join(", ")}
+                        {countTerms(project.context) > 8 ? " …" : ""}
+                      </span>
+                    )}
+                  </div>
+                  <div className="project-actions">
+                    <button
+                      type="button"
+                      className="btn btn-small"
+                      onClick={() => {
+                        setEditingProjectId(project.id);
+                        setEditName(project.name);
+                        setEditContext(project.context);
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <label className="btn btn-small">
+                      {importingId === project.id ? "Importing..." : "Import file"}
+                      <input
+                        type="file"
+                        accept=".pdf,.txt,.md,.markdown"
+                        style={{ display: "none" }}
+                        disabled={importingId === project.id}
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          event.target.value = "";
+                          if (!file) return;
+                          setImportingId(project.id);
+                          api
+                            .importProjectDocument(project.id, file)
+                            .then((result) => {
+                              onProjectsChanged();
+                              onToast(
+                                result.added.length
+                                  ? `Imported ${result.added.length} new term(s) from ${file.name}.`
+                                  : `No new terms found in ${file.name}.`,
+                              );
+                            })
+                            .catch((error: Error) => onToast(error.message, "error"))
+                            .finally(() => setImportingId(null));
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-small btn-danger-ghost"
+                      onClick={() => setDeleteTarget(project)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+        <div className="new-project-form">
+          <input
+            type="text"
+            placeholder="New course/project name"
+            value={newProjectName}
+            onChange={(event) => setNewProjectName(event.target.value)}
+          />
+          <textarea
+            rows={3}
+            placeholder={"Recurring terms (optional)\nNUMA\nTLB\nDaniele Cattaneo"}
+            value={newProjectContext}
+            onChange={(event) => setNewProjectContext(event.target.value)}
+          />
+          <button
+            type="button"
+            className="btn"
+            disabled={!newProjectName.trim()}
+            onClick={() => {
+              api
+                .createProject(newProjectName.trim(), newProjectContext)
+                .then(() => {
+                  setNewProjectName("");
+                  setNewProjectContext("");
+                  onProjectsChanged();
+                  onToast("Course/project created.");
+                })
+                .catch((error: Error) => onToast(error.message, "error"));
+            }}
+          >
+            Create course/project
+          </button>
+        </div>
+      </section>
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete course/project"
+          body={`Delete "${deleteTarget.name}"? Jobs that already used it keep their merged context; only the reusable project entry is removed.`}
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const target = deleteTarget;
+            setDeleteTarget(null);
+            api
+              .deleteProject(target.id)
+              .then(() => {
+                onProjectsChanged();
+                onToast("Course/project deleted.");
+              })
+              .catch((error: Error) => onToast(error.message, "error"));
+          }}
+        />
+      )}
 
       <section className="panel" aria-label="Subtitle preferences">
         <h2 className="panel-title">Subtitles</h2>

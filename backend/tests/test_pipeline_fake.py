@@ -77,7 +77,7 @@ def test_pipeline_end_to_end_with_fake_provider(paths: AppPaths, sine_wav: Path)
         index += 1
 
     payload = json.loads(Path(outcome.outputs["json"]).read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["job_id"] == ctx.job.id
     assert payload["source_filename"] == sine_wav.name
     assert payload["provider"] == "fake"

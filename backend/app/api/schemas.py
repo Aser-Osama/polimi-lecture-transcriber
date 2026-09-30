@@ -44,11 +44,23 @@ class CreateJobsRequest(BaseModel):
     sources: list[JobSource] = Field(min_length=1, max_length=200)
     model_key: str = DEFAULT_MODEL_KEY
     language: LanguageChoice = LanguageChoice.ENGLISH
-    glossary: str | None = None
+    glossary: str | None = None  # legacy alias for per_file_context
     provider: ProviderName = ProviderName.LOCAL_MLX
     openrouter_model: str | None = None
     align_with_whisperx: bool = False
+    project_id: str | None = None
+    per_file_context: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    context: str = ""
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    context: str | None = None
 
 
 class OpenRouterKeyRequest(BaseModel):

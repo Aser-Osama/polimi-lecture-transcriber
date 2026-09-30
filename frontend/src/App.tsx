@@ -19,6 +19,7 @@ import type {
   LanguageChoice,
   ModelInfo,
   OpenRouterModel,
+  Project,
   SelectedItem,
   ViewName,
 } from "./types";
@@ -64,6 +65,8 @@ export default function App() {
   const [openrouterModel, setOpenrouterModel] = useState("microsoft/mai-transcribe-2");
   const [alignWithWhisperx, setAlignWithWhisperx] = useState(false);
   const [alignmentStatus, setAlignmentStatus] = useState<AlignmentStatus | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const initialized = useRef(false);
 
   const { jobs, connection, fractions, modelDownloads, alignmentInstall } = useJobs();
@@ -84,7 +87,8 @@ export default function App() {
       initialized.current = true;
       setLanguage(bundle.settings.default_language);
       setModelKey(bundle.settings.default_model_key);
-      setGlossary(bundle.settings.glossary);
+      // Per-file context starts empty; the global context is merged server-side.
+      setGlossary("");
       setBackend(
         bundle.settings.default_provider === "openrouter" ? "openrouter" : "local_mlx",
       );
@@ -103,6 +107,11 @@ export default function App() {
     setAlignmentStatus(status);
   }, []);
 
+  const loadProjects = useCallback(async () => {
+    const result = await api.listProjects();
+    setProjects(result.projects);
+  }, []);
+
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
     loadSettings().catch((error: Error) => toast(error.message, "error"));
@@ -112,7 +121,8 @@ export default function App() {
       .then((result) => setOpenrouterModels(result.models))
       .catch((error: Error) => toast(error.message, "error"));
     loadAlignment().catch(() => undefined);
-  }, [loadSettings, loadModels, loadAlignment, toast]);
+    loadProjects().catch((error: Error) => toast(error.message, "error"));
+  }, [loadSettings, loadModels, loadAlignment, loadProjects, toast]);
 
   useEffect(() => {
     if (alignmentInstall?.state === "completed") {
@@ -208,6 +218,7 @@ export default function App() {
         provider: backend,
         openrouterModel: backend === "openrouter" ? openrouterModel : null,
         alignWithWhisperx: alignWithWhisperx && alignmentStatus?.installed === true,
+        projectId: selectedProjectId,
       });
       setSelected([]);
       toast(`Queued ${result.jobs.length} job${result.jobs.length === 1 ? "" : "s"}.`);
@@ -224,7 +235,23 @@ export default function App() {
     openrouterModel,
     alignWithWhisperx,
     alignmentStatus,
+    selectedProjectId,
   ]);
+
+  const createProject = useCallback(
+    async (name: string, context: string) => {
+      try {
+        const project = await api.createProject(name, context);
+        await loadProjects();
+        setSelectedProjectId(project.id);
+        toast(`Course/project "${project.name}" created and selected.`);
+      } catch (error) {
+        toast((error as Error).message, "error");
+        throw error;
+      }
+    },
+    [loadProjects, toast],
+  );
 
   const wrap = useCallback(
     <T,>(promise: Promise<T>, onSuccess?: (value: T) => void) => {
@@ -248,12 +275,16 @@ export default function App() {
           hasOpenRouterKey={settingsBundle.openrouter_key_present}
           alignmentStatus={alignmentStatus}
           alignmentInstall={alignmentInstall}
+          projects={projects}
           onSaved={() => {
             void loadSettings();
           }}
           onModelsChanged={() => void loadModels()}
           onKeyChanged={() => void loadSettings()}
           onAlignmentChanged={() => void loadAlignment()}
+          onProjectsChanged={() => {
+            void loadProjects();
+          }}
           onToast={toast}
         />
         <Toasts toasts={toasts} />
@@ -287,6 +318,9 @@ export default function App() {
             modelKey={modelKey}
             openrouterModel={openrouterModel}
             glossary={glossary}
+            globalContext={settingsBundle?.settings.glossary ?? ""}
+            projects={projects}
+            selectedProjectId={selectedProjectId}
             models={models}
             openrouterModels={openrouterModels}
             hasOpenRouterKey={settingsBundle?.openrouter_key_present ?? false}
@@ -302,6 +336,8 @@ export default function App() {
             onGlossaryChange={setGlossary}
             onAlignChange={setAlignWithWhisperx}
             onGoToSettings={() => setView("settings")}
+            onProjectChange={setSelectedProjectId}
+            onCreateProject={createProject}
           />
           <div className="start-row">
             <button

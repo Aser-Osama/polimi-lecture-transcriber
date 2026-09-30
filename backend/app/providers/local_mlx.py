@@ -149,6 +149,10 @@ class LocalMLXProvider(TranscriptionProvider):
             language=result.get("language"),
             segments=segments,
             duration=inference_seconds,
+            meta={
+                "context_applied": "initial_prompt" if request.initial_prompt else "none",
+                "context_terms": len(request.context_terms or []),
+            },
         )
 
 

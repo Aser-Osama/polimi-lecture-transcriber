@@ -84,6 +84,35 @@ macOS — including MLX's Metal buffer cache and the model weights (~3 GB for La
 next job simply starts a fresh worker and reloads the model from the cache in a few seconds.
 Transient MLX buffers are also released after every job.
 
+## Hierarchical transcription context (optional)
+
+Context helps every backend recognize names, acronyms and domain terminology. Three levels are
+merged at transcription time as **Global + Course/Project + Current file**, where more specific
+terms override broader ones (case-insensitive de-duplication, most specific spelling wins):
+
+| Level | Where | For |
+| --- | --- | --- |
+| Global | Settings → Global context | persistent names, terminology, preferences — applies to every job |
+| Course/Project | Settings → Courses / Projects (or "New..." in the transcribe view) | recurring vocabulary, professor names, acronyms per course/project |
+| Current file | Transcribe view → context field | one-off topics, guest speakers, unusual terms |
+
+Context is never mandatory: with all three empty the app behaves exactly as before. PDF, TXT
+and Markdown files can be uploaded per course/project to extract candidate names/acronyms/terms
+with explainable frequency heuristics (no LLM, no embeddings, no vector database) — the
+extracted terms are appended to the project's context and stay fully editable.
+
+How context reaches the models (adapted per backend, gracefully degrading):
+
+| Backend / model | Context mechanism |
+| --- | --- |
+| Local MLX Whisper (all sizes) | Whisper `initial_prompt` (cleaned, de-duplicated, 224-token-safe) |
+| OpenRouter `microsoft/mai-transcribe-2` | Keyword biasing via `provider.options.azure.phraseList.phrases` (max 100 terms) |
+| Other OpenRouter models | No biasing support — the job runs normally and a warning notes the terms were not sent |
+
+Every result JSON stores the full context breakdown (`context.global_context`,
+`project_name`, `per_file_context`, `effective`, `terms`) and `provider_meta.context_applied`,
+so you can see exactly what was used.
+
 ## OpenRouter backend (optional)
 
 Choose **OpenRouter** in the backend selector, pick a model and add your API key in

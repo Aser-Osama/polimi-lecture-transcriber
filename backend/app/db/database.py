@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models.domain import Job, JobStatus
+from app.models.domain import Job, JobStatus, Project
 from app.version import DB_SCHEMA_VERSION
 
 log = logging.getLogger(__name__)
@@ -61,14 +61,30 @@ class Database:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version == 1:
             conn.executescript(
-                f"""
+                """
                 BEGIN;
-                ALTER TABLE jobs ADD COLUMN provider_meta_json TEXT NOT NULL DEFAULT '{{}}';
-                PRAGMA user_version = {DB_SCHEMA_VERSION};
+                ALTER TABLE jobs ADD COLUMN provider_meta_json TEXT NOT NULL DEFAULT '{}';
+                PRAGMA user_version = 2;
                 COMMIT;
                 """
             )
-            version = DB_SCHEMA_VERSION
+            version = 2
+        if version == 2:
+            conn.executescript(
+                """
+                BEGIN;
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    context TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                PRAGMA user_version = 3;
+                COMMIT;
+                """
+            )
+            version = 3
         if version == 0:
             conn.executescript(
                 f"""
@@ -101,6 +117,13 @@ class Database:
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    context TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 PRAGMA user_version = {DB_SCHEMA_VERSION};
                 COMMIT;
@@ -275,6 +298,61 @@ class Database:
                 "UPDATE jobs SET archived=? WHERE id=?", (1 if archived else 0, job_id)
             )
         return cursor.rowcount > 0
+
+    # -------------------------------------------------------------- projects
+
+    def insert_project(self, project: Project) -> None:
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                "INSERT INTO projects (id, name, context, created_at, updated_at) VALUES (?,?,?,?,?)",
+                (
+                    project.id,
+                    project.name,
+                    project.context,
+                    project.created_at.isoformat(),
+                    project.updated_at.isoformat(),
+                ),
+            )
+
+    def update_project(self, project: Project) -> None:
+        project.updated_at = datetime.now(UTC)
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                "UPDATE projects SET name=?, context=?, updated_at=? WHERE id=?",
+                (
+                    project.name,
+                    project.context,
+                    project.updated_at.isoformat(),
+                    project.id,
+                ),
+            )
+
+    def get_project(self, project_id: str) -> Project | None:
+        with self._lock, self._connection() as conn:
+            row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return self._row_to_project(row) if row else None
+
+    def list_projects(self) -> list[Project]:
+        with self._lock, self._connection() as conn:
+            rows = conn.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE").fetchall()
+        return [self._row_to_project(row) for row in rows]
+
+    def delete_project(self, project_id: str) -> bool:
+        with self._lock, self._connection() as conn:
+            cursor = conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        return cursor.rowcount > 0
+
+    @staticmethod
+    def _row_to_project(row: sqlite3.Row) -> Project:
+        return Project.model_validate(
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "context": row["context"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+        )
 
     # -------------------------------------------------------------- settings
 

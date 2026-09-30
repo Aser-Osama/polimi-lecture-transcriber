@@ -43,7 +43,10 @@ export function HistoryView({ jobs, models, onPreview, onRetry, onReveal, onDele
                   <td>{formatDateTime(job.created_at)}</td>
                   <td className="history-name" title={job.source_path}>
                     {job.source_filename}
-                    <span className="history-size">{formatBytes(job.size_bytes)}</span>
+                    <span className="history-size">
+                      {formatBytes(job.size_bytes)}
+                      {job.config.project_name ? ` · ${job.config.project_name}` : ""}
+                    </span>
                   </td>
                   <td>
                     {job.config.provider === "openrouter"
