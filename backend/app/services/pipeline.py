@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.alignment.base import AlignmentProvider
+from app.alignment.cloud_anchor import CloudAnchorAligner
 from app.alignment.mlx_word_aligner import MLXWordTimestampAligner
 from app.alignment.tiny_anchor import build_alignment_windows, map_remote_tokens
 from app.alignment.whisperx_aligner import WhisperXAligner
@@ -88,6 +89,7 @@ class PipelineContext:
     provider: TranscriptionProvider | None = None
     aligner: AlignmentProvider | None = None
     whisperx_aligner: AlignmentProvider | None = None
+    cloud_aligner: AlignmentProvider | None = None
     anchor_provider: TranscriptionProvider | None = None
     provider_options: dict = field(default_factory=dict)
 
@@ -192,12 +194,24 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
     # --- alignment ---------------------------------------------------------
     ctx.progress("aligning", "Aligning word timestamps")
     t0 = time.monotonic()
-    transcription.meta = {**provider_meta, "audio_path": str(audio_path)}
-    words, alignment_provider_used, alignment_warnings = _align_transcription(
-        ctx, transcription, media_duration, cancel
-    )
+    transcription.meta = {
+        **provider_meta,
+        "audio_path": str(audio_path),
+        "context_terms": context_terms,
+        "requested_language": job.config.language.whisper_code,
+    }
+    alignment_outcome = _align_transcription(ctx, transcription, media_duration, cancel)
     timings.alignment = time.monotonic() - t0
-    warnings.extend(alignment_warnings)
+    warnings.extend(alignment_outcome.warnings)
+    alignment_provider_used = alignment_outcome.provider
+    words = alignment_outcome.words
+    if alignment_outcome.meta:
+        anchor_cost = float(alignment_outcome.meta.get("anchor_cost_usd", 0.0) or 0.0)
+        if anchor_cost > 0:
+            alignment_outcome.meta["cost_usd"] = round(
+                float(provider_meta.get("cost_usd", 0.0) or 0.0) + anchor_cost, 6
+            )
+        provider_meta = {**provider_meta, **alignment_outcome.meta}
     cancel.raise_if_cancelled()
 
     # --- subtitle segmentation --------------------------------------------
@@ -329,41 +343,56 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
     )
 
 
+@dataclass
+class AlignOutcome:
+    words: list[AlignedWord] = field(default_factory=list)
+    provider: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
+
+
 def _align_transcription(
     ctx: PipelineContext,
     transcription: RawTranscription,
     media_duration: float | None,
     cancel: CancellationToken,
-) -> tuple[list[AlignedWord], str | None, list[str]]:
-    """Build word timings for this transcription.
+) -> AlignOutcome:
+    """Build word timings for this transcription according to the alignment mode.
 
-    Returns (words, alignment_provider_name, warnings).
-
-    1. Native word timestamps are extracted first (Whisper cross-attention DTW
-       or the remote model's own words).
-    2. With 'Improve subtitle alignment' enabled, WhisperX re-times the
-       transcript against the audio (never re-transcribing it).
-    3. When a remote model returned no timing at all, a local Whisper tiny
-       anchor pass supplies real speech windows for WhisperX.
+    - none: keep native timestamps (Whisper DTW or the remote model's words).
+    - cloud: prefer the remote model's native word timestamps; when the chosen
+      model returned none, run a cloud anchor pass with MAI-Transcribe 2 on
+      OpenRouter (no local compute).
+    - local_whisperx: re-time the transcript locally with WhisperX, falling
+      back to a local Whisper tiny anchor pass for text-only results.
     """
-    warnings: list[str] = []
+    outcome = AlignOutcome()
     native_aligner = ctx.aligner or MLXWordTimestampAligner()
     native = native_aligner.align(transcription, media_duration, noop_progress, cancel)
-    warnings.extend(native.warnings)
+    outcome.warnings.extend(native.warnings)
     native_words = native.words
     native_provider = "native_word_timestamps" if native_words else None
 
-    if not ctx.job.config.align_with_whisperx:
-        return native_words, native_provider, warnings
+    mode = ctx.job.config.effective_alignment_mode
+
+    if mode == "cloud":
+        return _align_cloud(
+            ctx, transcription, media_duration, cancel, native_words, native_provider, outcome
+        )
+
+    if mode != "local_whisperx":
+        outcome.words, outcome.provider = native_words, native_provider
+        return outcome
 
     status = whisperx_status()
     whisperx = ctx.whisperx_aligner or WhisperXAligner()
     if not (status.get("installed") and whisperx.is_available()):
-        warnings.append(
+        outcome.warnings.append(
             "WhisperX alignment is not installed; native timestamps were kept. "
             "Install it from Settings."
         )
-        return native_words, native_provider, warnings
+        outcome.words, outcome.provider = native_words, native_provider
+        return outcome
 
     def whisperx_progress(stage: str, message: str | None = None, fraction: float | None = None) -> None:
         ctx.progress("aligning", message, fraction)
@@ -371,10 +400,13 @@ def _align_transcription(
     # Case 1: the provider returned segments - align them directly.
     if transcription.segments:
         aligned = whisperx.align(transcription, media_duration, whisperx_progress, cancel)
-        warnings.extend(aligned.warnings)
+        outcome.warnings.extend(aligned.warnings)
+        outcome.meta.update(aligned.meta)
         if aligned.words:
-            return aligned.words, "whisperx", warnings
-        return native_words, native_provider, warnings
+            outcome.words, outcome.provider = aligned.words, "whisperx"
+            return outcome
+        outcome.words, outcome.provider = native_words, native_provider
+        return outcome
 
     # Case 2: words without segments - derive segment windows from the words.
     if native_words:
@@ -382,10 +414,13 @@ def _align_transcription(
             update={"segments": segments_from_words(native_words)}
         )
         aligned = whisperx.align(synthetic, media_duration, whisperx_progress, cancel)
-        warnings.extend(aligned.warnings)
+        outcome.warnings.extend(aligned.warnings)
+        outcome.meta.update(aligned.meta)
         if aligned.words:
-            return aligned.words, "whisperx", warnings
-        return native_words, native_provider, warnings
+            outcome.words, outcome.provider = aligned.words, "whisperx"
+            return outcome
+        outcome.words, outcome.provider = native_words, native_provider
+        return outcome
 
     # Case 3: text only - local tiny anchor pass, then WhisperX in those windows.
     ctx.progress("aligning", "Running local speech anchor pass (Whisper tiny)")
@@ -408,16 +443,16 @@ def _align_transcription(
         anchor_result, media_duration, noop_progress, cancel
     )
     if not anchor_alignment.words:
-        warnings.append(
+        outcome.warnings.append(
             "The local anchor pass produced no word timings; subtitles were not generated."
         )
-        return [], None, warnings
+        return outcome
 
     remote_text = transcription.text or " ".join(s.text for s in transcription.segments)
     mapping = map_remote_tokens(remote_text, anchor_alignment.words, media_duration)
-    warnings.extend(mapping.warnings)
+    outcome.warnings.extend(mapping.warnings)
     if not mapping.ok:
-        return [], None, warnings
+        return outcome
 
     windows = build_alignment_windows(mapping.words, anchor_result.segments)
     if windows:
@@ -431,10 +466,50 @@ def _align_transcription(
             meta=transcription.meta,
         )
         aligned = whisperx.align(window_transcription, media_duration, whisperx_progress, cancel)
-        warnings.extend(aligned.warnings)
+        outcome.warnings.extend(aligned.warnings)
         if aligned.words:
-            return aligned.words, "tiny_anchor+whisperx", warnings
-    return mapping.words, "tiny_anchor", warnings
+            outcome.words, outcome.provider = aligned.words, "tiny_anchor+whisperx"
+            return outcome
+    outcome.words, outcome.provider = mapping.words, "tiny_anchor"
+    return outcome
+
+
+def _align_cloud(
+    ctx: PipelineContext,
+    transcription: RawTranscription,
+    media_duration: float | None,
+    cancel: CancellationToken,
+    native_words: list[AlignedWord],
+    native_provider: str | None,
+    outcome: AlignOutcome,
+) -> AlignOutcome:
+    """Cloud alignment: native words when present, otherwise MAI-2 anchors."""
+    if not transcription.meta.get("openrouter_model"):
+        outcome.warnings.append(
+            "Cloud alignment requires the OpenRouter backend; native timestamps were kept."
+        )
+        outcome.words, outcome.provider = native_words, native_provider
+        return outcome
+
+    if native_words:
+        # The chosen cloud model already returned word timestamps: use them
+        # directly. No extra pass, no extra cost.
+        outcome.words, outcome.provider = native_words, native_provider
+        return outcome
+
+    aligner = ctx.cloud_aligner or CloudAnchorAligner()
+
+    def cloud_progress(stage: str, message: str | None = None, fraction: float | None = None) -> None:
+        ctx.progress("aligning", message, fraction)
+
+    aligned = aligner.align(transcription, media_duration, cloud_progress, cancel)
+    outcome.warnings.extend(aligned.warnings)
+    outcome.meta.update(aligned.meta)
+    if aligned.words:
+        outcome.words, outcome.provider = aligned.words, "cloud_anchor"
+    else:
+        outcome.words, outcome.provider = native_words, native_provider
+    return outcome
 
 
 def cleanup_work_dir(work_dir: Path, keep: bool = False) -> None:

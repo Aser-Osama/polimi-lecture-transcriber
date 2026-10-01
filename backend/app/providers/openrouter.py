@@ -291,6 +291,7 @@ class OpenRouterProvider(TranscriptionProvider):
             request.media_duration,
             cancel=cancel,
             on_progress=on_chunk_prep,
+            reuse_existing=bool(request.options.get("reuse_existing_chunks")),
         )
         cancel.raise_if_cancelled()
         log.info(

@@ -15,9 +15,11 @@ Everything runs on your Mac. Nothing is uploaded anywhere.
   turbo, Qwen3-ASR) selectable per job in the UI
 - **Word-level timestamps** (Whisper cross-attention + DTW, or the remote model's own word
   timings) used to build subtitle cues — never fabricated timings
-- Optional **WhisperX forced alignment** (local, Apple-silicon accelerated): re-times the
-  transcript of *any* backend against the original audio **without re-transcribing**; for
-  text-only remote models a quick local Whisper tiny anchor pass supplies real speech windows
+- **Subtitle alignment with three modes**: none (native timestamps), **Cloud** (word timestamps
+  from the chosen OpenRouter model, or a MAI-Transcribe 2 anchor pass when it has none — nothing
+  runs on your Mac), or local **WhisperX** forced alignment (Apple-silicon accelerated)
+- **Parallel cloud jobs**: jobs that run fully on OpenRouter execute concurrently (1–6,
+  default 3) since they do not use this Mac; local jobs always run one at a time
 - Three quality tiers with real, verified Hugging Face models (downloaded on demand)
 - TXT, SRT, WebVTT and versioned JSON output per job; JSON retains raw Whisper segments,
   word timestamps and final cues so subtitles can be regenerated later
@@ -134,6 +136,29 @@ granularities. Chunk progress, detected language, per-job cost (`usage.cost`) an
 are recorded in the job and result JSON. Models that cannot return structured output are
 retried as plain text and flagged in the job warnings — enable WhisperX alignment to still
 get subtitles. Course vocabulary is local-only (OpenRouter ignores prompts).
+
+## Subtitle alignment
+
+Choose per batch in the transcribe view:
+
+| Mode | Where it runs | How it works |
+| --- | --- | --- |
+| **None** | — | Uses the model's own timestamps (Whisper DTW locally, native word timestamps on OpenRouter models that provide them). |
+| **Cloud** (OpenRouter only) | OpenRouter | If the chosen model returns word timestamps (MAI-Transcribe 2, Whisper, Qwen3-ASR 1.7B) they are used **directly — no extra pass, no extra cost**. If it returns none (e.g. Qwen3 ASR Flash), a second OpenRouter call to **MAI-Transcribe 2** ($0.10/hour) supplies timing anchors that the transcript is matched onto. The transcript text stays 100% from the model you selected, and both costs are shown per job. |
+| **Local WhisperX** | This Mac | wav2vec2 forced alignment (MPS/CPU) re-times any transcript without re-transcribing it; text-only results get a local Whisper tiny anchor pass first. |
+
+There is no dedicated forced-alignment model on OpenRouter (verified against their model list),
+so Cloud mode uses the strongest word-timestamp models available there. Note for later:
+Qwen's `Qwen3-ForcedAligner-0.6B` is roughly 3× more accurate than WhisperX but is not served
+by OpenRouter; it could be added via a GPU provider (see `docs/vast-provider-plan.md`).
+
+### Parallel cloud jobs
+
+Settings → Defaults → **Parallel cloud jobs** (1–6, default 3). A job counts as cloud-only when
+its transcription provider is OpenRouter *and* its alignment is not Local WhisperX; those jobs
+each get their own worker and run concurrently. Jobs that touch this Mac (MLX transcription or
+WhisperX) share a single worker and stay strictly sequential, and they can overlap with cloud
+jobs.
 
 ## WhisperX alignment (optional)
 
@@ -307,8 +332,11 @@ fake provider), `HF_HOME` (model cache override), `PT_OPENROUTER_BASE_URL` (test
   warm for the next job. It is released automatically after 60 s without queued work; the next
   job reloads it from the local cache.
 - **OpenRouter job fails with 401** — the key was rejected; re-enter it in Settings.
-- **OpenRouter job has no subtitles** — the chosen model returned text only. Enable WhisperX
-  alignment (or pick a model with word timestamps) and re-run.
+- **OpenRouter job has no subtitles** — the chosen model returned text only and alignment was
+  "None". Switch alignment to **Cloud** (adds a cheap MAI-Transcribe 2 anchor pass) or pick a
+  model with word timestamps, then re-run.
+- **Cloud alignment rejected at start** — Cloud mode requires the OpenRouter backend; switch the
+  backend or use Local WhisperX.
 - **WhisperX install fails** — check the log; usually a network hiccup during the pip install.
   Press Install again (the installer is idempotent).
 - **Where are the details?** — `~/Library/Logs/Polimi Lecture Transcriber/app.log`

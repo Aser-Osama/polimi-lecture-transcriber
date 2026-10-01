@@ -61,6 +61,7 @@ export interface CreateJobOptions {
   provider?: string;
   openrouterModel?: string | null;
   alignWithWhisperx?: boolean;
+  alignmentMode?: string;
   projectId?: string | null;
 }
 
@@ -109,6 +110,7 @@ export const api = {
         provider: options.provider ?? "local_mlx",
         openrouter_model: options.openrouterModel ?? null,
         align_with_whisperx: options.alignWithWhisperx ?? false,
+        alignment_mode: options.alignmentMode ?? "none",
         project_id: options.projectId ?? null,
       } satisfies Record<string, unknown>),
     }),

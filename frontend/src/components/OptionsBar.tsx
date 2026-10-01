@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { formatBytes, termCount } from "../format";
 import type {
+  AlignmentMode,
   LanguageChoice,
   ModelInfo,
   OpenRouterModel,
@@ -32,14 +33,14 @@ interface Props {
   alignmentInstalled: boolean | null;
   alignmentDevice: string | null;
   alignmentMessage: string | null;
-  alignWithWhisperx: boolean;
+  alignmentMode: AlignmentMode;
   disabled: boolean;
   onBackendChange: (value: BackendChoice) => void;
   onLanguageChange: (value: LanguageChoice) => void;
   onModelChange: (value: string) => void;
   onOpenRouterModelChange: (value: string) => void;
   onGlossaryChange: (value: string) => void;
-  onAlignChange: (value: boolean) => void;
+  onAlignmentModeChange: (value: AlignmentMode) => void;
   onGoToSettings: () => void;
   onProjectChange: (projectId: string | null) => void;
   onCreateProject: (name: string, context: string) => Promise<void>;
@@ -60,14 +61,14 @@ export function OptionsBar({
   alignmentInstalled,
   alignmentDevice,
   alignmentMessage,
-  alignWithWhisperx,
+  alignmentMode,
   disabled,
   onBackendChange,
   onLanguageChange,
   onModelChange,
   onOpenRouterModelChange,
   onGlossaryChange,
-  onAlignChange,
+  onAlignmentModeChange,
   onGoToSettings,
   onProjectChange,
   onCreateProject,
@@ -184,30 +185,52 @@ export function OptionsBar({
         )}
       </div>
 
-      <div className="field checkbox-field alignment-field">
-        <label>
-          <input
-            type="checkbox"
-            checked={alignWithWhisperx}
-            disabled={disabled || alignmentInstalled === false}
-            onChange={(event) => onAlignChange(event.target.checked)}
-          />
-          Improve subtitle alignment (WhisperX, local, no re-transcription)
-        </label>
+      <div className="field alignment-field">
+        <label htmlFor="alignment-mode">Subtitle alignment</label>
+        <select
+          id="alignment-mode"
+          value={alignmentMode}
+          disabled={disabled}
+          onChange={(event) => onAlignmentModeChange(event.target.value as AlignmentMode)}
+        >
+          <option value="none">
+            {backend === "openrouter"
+              ? "None - use the model's own timestamps"
+              : "None - native Whisper timestamps"}
+          </option>
+          {backend === "openrouter" && (
+            <option value="cloud">Cloud - native timestamps + MAI anchors when needed</option>
+          )}
+          <option value="local_whisperx" disabled={alignmentInstalled === false}>
+            Local WhisperX{alignmentInstalled === false ? " (not installed)" : " (runs on this Mac)"}
+          </option>
+        </select>
         <p className="field-hint">
-          {alignmentInstalled === null && "Checking WhisperX availability..."}
-          {alignmentInstalled === true &&
-            `Forced alignment re-times this model's transcript against the audio on this Mac${
-              alignmentDevice ? ` (${alignmentDevice.toUpperCase()})` : ""
-            }.`}
-          {alignmentInstalled === false && (
+          {alignmentMode === "cloud" &&
+            "Word timestamps from the chosen model are used directly when it provides them; " +
+              "models without timestamps (e.g. Qwen3 ASR Flash) get timing anchors from " +
+              "MAI-Transcribe 2 in the cloud (~$0.10/hour of audio). Nothing runs on this Mac."}
+          {alignmentMode === "local_whisperx" && (
             <>
-              {alignmentMessage ?? "WhisperX is not installed."}{" "}
-              <button type="button" className="link-btn" onClick={onGoToSettings}>
-                Install in Settings
-              </button>
+              {alignmentInstalled === null && "Checking WhisperX availability..."}
+              {alignmentInstalled === true &&
+                `Forced alignment re-times this model's transcript against the audio on this Mac${
+                  alignmentDevice ? ` (${alignmentDevice.toUpperCase()})` : ""
+                }.`}
+              {alignmentInstalled === false && (
+                <>
+                  {alignmentMessage ?? "WhisperX is not installed."}{" "}
+                  <button type="button" className="link-btn" onClick={onGoToSettings}>
+                    Install in Settings
+                  </button>
+                </>
+              )}
             </>
           )}
+          {alignmentMode === "none" &&
+            (backend === "openrouter"
+              ? "Models without their own word timestamps produce no subtitles unless Cloud or Local WhisperX alignment is selected."
+              : "Whisper's own word-level timestamps are used. WhisperX can refine them if needed.")}
         </p>
       </div>
 

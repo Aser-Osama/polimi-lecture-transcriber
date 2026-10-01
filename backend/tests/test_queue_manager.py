@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -13,13 +15,72 @@ from app.models.domain import (
     LanguageChoice,
     ProviderName,
 )
+from app.models.result import RawSegment, RawWord
+from app.providers.base import RawTranscription
 from app.queue import manager as manager_module
+from app.services import pipeline as pipeline_module
 from tests.helpers import (
     DeadWorkerHandle,
     make_queue_env,
     wait_for_status,
     wait_until,
 )
+
+
+class CountingProvider:
+    """Records peak concurrency and honors cancellation while 'working'."""
+
+    name = "openrouter"
+    _lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def __init__(self, delay: float):
+        self._delay = delay
+
+    @classmethod
+    def reset(cls) -> None:
+        with cls._lock:
+            cls.active = 0
+            cls.peak = 0
+
+    def transcribe_sync(self, request, progress, cancel):
+        progress("loading_model", None)
+        with type(self)._lock:
+            type(self).active += 1
+            type(self).peak = max(type(self).peak, type(self).active)
+        try:
+            deadline = time.monotonic() + self._delay
+            while time.monotonic() < deadline:
+                cancel.raise_if_cancelled()
+                time.sleep(0.05)
+            progress("transcribing", None, 1.0)
+            return RawTranscription(
+                text="Hello world.",
+                language="en",
+                segments=[
+                    RawSegment(
+                        id=0,
+                        start=0.0,
+                        end=1.0,
+                        text="Hello world.",
+                        words=[
+                            RawWord(text="Hello", start=0.1, end=0.4),
+                            RawWord(text="world.", start=0.5, end=0.9),
+                        ],
+                    )
+                ],
+            )
+        finally:
+            with type(self)._lock:
+                type(self).active -= 1
+
+
+def patch_provider(monkeypatch, delay: float) -> None:
+    CountingProvider.reset()
+    monkeypatch.setattr(
+        pipeline_module, "create_provider", lambda name: CountingProvider(delay)
+    )
 
 
 def make_job(paths, source: Path, **config_kwargs) -> Job:
@@ -257,6 +318,118 @@ async def test_batch_keeps_worker_during_idle_gap(paths, sine_wav, monkeypatch):
         await environment.manager.enqueue(second)
         await wait_for_status(environment.db, second.id, {JobStatus.COMPLETED}, timeout=30)
         assert len(environment.factory_calls) == 1
+    finally:
+        await environment.manager.stop()
+
+
+def cloud_job(paths, source: Path) -> Job:
+    return make_job(paths, source, provider=ProviderName.OPENROUTER, alignment_mode="none")
+
+
+async def test_cloud_jobs_run_in_parallel(paths, sine_wav, monkeypatch):
+    patch_provider(monkeypatch, delay=0.6)
+    environment = make_queue_env(paths)
+    await environment.manager.start()
+    try:
+        jobs = [cloud_job(paths, sine_wav) for _ in range(3)]
+        for job in jobs:
+            await environment.manager.enqueue(job)
+        for job in jobs:
+            await wait_for_status(environment.db, job.id, {JobStatus.COMPLETED}, timeout=60)
+        assert CountingProvider.peak >= 2, "cloud jobs should overlap"
+        assert len(environment.factory_calls) == 3, "each cloud job gets its own worker"
+        assert environment.manager._worker is None, "no local worker needed for cloud jobs"
+    finally:
+        await environment.manager.stop()
+
+
+async def test_cloud_concurrency_cap_is_respected(paths, sine_wav, monkeypatch):
+    patch_provider(monkeypatch, delay=0.3)
+    environment = make_queue_env(paths)
+    await environment.manager.start()
+    try:
+        environment.settings.update({"max_parallel_cloud_jobs": 1})
+        jobs = [cloud_job(paths, sine_wav) for _ in range(3)]
+        for job in jobs:
+            await environment.manager.enqueue(job)
+        for job in jobs:
+            await wait_for_status(environment.db, job.id, {JobStatus.COMPLETED}, timeout=60)
+        assert CountingProvider.peak == 1
+    finally:
+        await environment.manager.stop()
+
+
+async def test_local_jobs_stay_sequential(paths, sine_wav, monkeypatch):
+    patch_provider(monkeypatch, delay=0.25)
+    environment = make_queue_env(paths)
+    await environment.manager.start()
+    try:
+        jobs = [make_job(paths, sine_wav) for _ in range(3)]  # fake provider -> local slot
+        for job in jobs:
+            await environment.manager.enqueue(job)
+        for job in jobs:
+            await wait_for_status(environment.db, job.id, {JobStatus.COMPLETED}, timeout=60)
+        assert CountingProvider.peak == 1
+        assert len(environment.factory_calls) == 1, "local jobs reuse one worker"
+    finally:
+        await environment.manager.stop()
+
+
+async def test_mixed_local_and_cloud_run_together(paths, sine_wav, monkeypatch):
+    patch_provider(monkeypatch, delay=0.5)
+    environment = make_queue_env(paths)
+    await environment.manager.start()
+    try:
+        jobs = [make_job(paths, sine_wav), cloud_job(paths, sine_wav), cloud_job(paths, sine_wav)]
+        for job in jobs:
+            await environment.manager.enqueue(job)
+        for job in jobs:
+            await wait_for_status(environment.db, job.id, {JobStatus.COMPLETED}, timeout=60)
+        assert CountingProvider.peak >= 2
+        assert len(environment.factory_calls) == 3  # 1 local + 2 cloud workers
+    finally:
+        await environment.manager.stop()
+
+
+async def test_openrouter_with_local_whisperx_uses_local_slot(paths, sine_wav, monkeypatch):
+    patch_provider(monkeypatch, delay=0.2)
+    environment = make_queue_env(paths)
+    await environment.manager.start()
+    try:
+        jobs = [
+            make_job(paths, sine_wav, provider=ProviderName.OPENROUTER, alignment_mode="local_whisperx")
+            for _ in range(2)
+        ]
+        for job in jobs:
+            await environment.manager.enqueue(job)
+        for job in jobs:
+            await wait_for_status(environment.db, job.id, {JobStatus.COMPLETED}, timeout=60)
+        assert CountingProvider.peak == 1
+        assert len(environment.factory_calls) == 1
+    finally:
+        await environment.manager.stop()
+
+
+async def test_cancel_one_parallel_cloud_job_keeps_the_other(paths, sine_wav, monkeypatch):
+    patch_provider(monkeypatch, delay=2.0)
+    environment = make_queue_env(paths)
+    await environment.manager.start()
+    try:
+        first = cloud_job(paths, sine_wav)
+        second = cloud_job(paths, sine_wav)
+        await environment.manager.enqueue(first)
+        await environment.manager.enqueue(second)
+        await wait_until(
+            lambda: len(environment.manager._active_jobs) == 2,
+            timeout=15,
+            what="both cloud jobs running",
+        )
+        cancelled = await environment.manager.cancel_job(first.id)
+        assert cancelled.status == JobStatus.CANCELLED
+        completed = await wait_for_status(
+            environment.db, second.id, {JobStatus.COMPLETED}, timeout=60
+        )
+        assert completed.outputs
     finally:
         await environment.manager.stop()
 

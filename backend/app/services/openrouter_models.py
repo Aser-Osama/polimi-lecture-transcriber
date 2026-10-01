@@ -57,6 +57,10 @@ OPENROUTER_MODELS: tuple[OpenRouterModelSpec, ...] = (
 )
 
 DEFAULT_OPENROUTER_MODEL = "microsoft/mai-transcribe-2"
+# Model used for cloud anchor alignment: it returns word-level timestamps and
+# is cheap ($0.10/hour), so timing the chosen model's transcript never touches
+# the local machine.
+CLOUD_ANCHOR_MODEL = "microsoft/mai-transcribe-2"
 
 _BY_ID = {spec.model_id: spec for spec in OPENROUTER_MODELS}
 

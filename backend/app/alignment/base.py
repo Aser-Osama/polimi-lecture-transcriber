@@ -23,6 +23,7 @@ def NOOP_PROGRESS(stage: str, message: str | None = None, fraction: float | None
 class AlignmentResult:
     words: list[AlignedWord] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
 
 
 class AlignmentProvider(ABC):

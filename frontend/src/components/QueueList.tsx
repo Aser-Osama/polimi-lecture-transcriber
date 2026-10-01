@@ -151,6 +151,8 @@ function JobRow({
           )}
           {costUsd !== null && costUsd > 0 && <span>${costUsd.toFixed(4)}</span>}
           {alignmentProvider?.includes("whisperx") && <span>WhisperX aligned</span>}
+          {alignmentProvider === "cloud_anchor" && <span>Cloud-aligned</span>}
+          {alignmentProvider === "tiny_anchor" && <span>Locally aligned</span>}
           {job.config.project_name && <span>project: {job.config.project_name}</span>}
           {elapsed && <span>{elapsed} elapsed</span>}
           {job.created_at && !job.started_at && (

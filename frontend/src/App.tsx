@@ -12,6 +12,7 @@ import { TopBar } from "./components/TopBar";
 import { useJobs } from "./hooks/useJobs";
 import type { BackendChoice } from "./components/OptionsBar";
 import type {
+  AlignmentMode,
   AlignmentStatus,
   AppSettings,
   Health,
@@ -63,7 +64,7 @@ export default function App() {
   const [backend, setBackend] = useState<BackendChoice>("local_mlx");
   const [openrouterModels, setOpenrouterModels] = useState<OpenRouterModel[]>([]);
   const [openrouterModel, setOpenrouterModel] = useState("microsoft/mai-transcribe-2");
-  const [alignWithWhisperx, setAlignWithWhisperx] = useState(false);
+  const [alignmentMode, setAlignmentMode] = useState<AlignmentMode>("none");
   const [alignmentStatus, setAlignmentStatus] = useState<AlignmentStatus | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -89,11 +90,19 @@ export default function App() {
       setModelKey(bundle.settings.default_model_key);
       // Per-file context starts empty; the global context is merged server-side.
       setGlossary("");
-      setBackend(
-        bundle.settings.default_provider === "openrouter" ? "openrouter" : "local_mlx",
-      );
+      const initialBackend =
+        bundle.settings.default_provider === "openrouter" ? "openrouter" : "local_mlx";
+      setBackend(initialBackend);
       setOpenrouterModel(bundle.settings.default_openrouter_model);
-      setAlignWithWhisperx(bundle.settings.default_align_with_whisperx);
+      const configuredDefault = bundle.settings.default_alignment_mode !== "none"
+        ? bundle.settings.default_alignment_mode
+        : bundle.settings.default_align_with_whisperx
+          ? "local_whisperx"
+          : "none";
+      const safeDefault = configuredDefault === "cloud" && initialBackend === "local_mlx"
+        ? "none"
+        : configuredDefault;
+      setAlignmentMode(safeDefault);
     }
   }, []);
 
@@ -217,7 +226,8 @@ export default function App() {
         glossary,
         provider: backend,
         openrouterModel: backend === "openrouter" ? openrouterModel : null,
-        alignWithWhisperx: alignWithWhisperx && alignmentStatus?.installed === true,
+        alignWithWhisperx: alignmentMode === "local_whisperx",
+        alignmentMode,
         projectId: selectedProjectId,
       });
       setSelected([]);
@@ -233,10 +243,35 @@ export default function App() {
     toast,
     backend,
     openrouterModel,
-    alignWithWhisperx,
-    alignmentStatus,
+    alignmentMode,
     selectedProjectId,
   ]);
+
+  const handleBackendChange = useCallback(
+    (value: BackendChoice) => {
+      setBackend(value);
+      if (value === "local_mlx" && alignmentMode === "cloud") {
+        setAlignmentMode("none");
+        toast("Cloud alignment needs the OpenRouter backend; alignment was set to none.");
+      } else if (value === "openrouter" && alignmentMode === "none") {
+        // Cloud alignment uses native timestamps for free and only adds
+        // anchor cost for models that have none.
+        setAlignmentMode("cloud");
+      }
+    },
+    [alignmentMode, toast],
+  );
+
+  const handleAlignmentModeChange = useCallback(
+    (value: AlignmentMode) => {
+      if (value === "local_whisperx" && alignmentStatus?.installed !== true) {
+        toast("WhisperX is not installed. Install it in Settings first.", "error");
+        return;
+      }
+      setAlignmentMode(value);
+    },
+    [alignmentStatus, toast],
+  );
 
   const createProject = useCallback(
     async (name: string, context: string) => {
@@ -327,14 +362,14 @@ export default function App() {
             alignmentInstalled={alignmentStatus?.installed ?? null}
             alignmentDevice={alignmentStatus?.device ?? null}
             alignmentMessage={alignmentStatus?.message ?? null}
-            alignWithWhisperx={alignWithWhisperx}
+            alignmentMode={alignmentMode}
             disabled={false}
-            onBackendChange={setBackend}
+            onBackendChange={handleBackendChange}
             onLanguageChange={setLanguage}
             onModelChange={setModelKey}
             onOpenRouterModelChange={setOpenrouterModel}
             onGlossaryChange={setGlossary}
-            onAlignChange={setAlignWithWhisperx}
+            onAlignmentModeChange={handleAlignmentModeChange}
             onGoToSettings={() => setView("settings")}
             onProjectChange={setSelectedProjectId}
             onCreateProject={createProject}

@@ -54,12 +54,15 @@ export type LanguageChoice = "en" | "it" | "auto";
 
 export type ProviderName = "local_mlx" | "openrouter" | "fake";
 
+export type AlignmentMode = "none" | "local_whisperx" | "cloud";
+
 export interface JobConfig {
   model_key: string;
   language: LanguageChoice;
   provider: ProviderName;
   openrouter_model: string | null;
   align_with_whisperx: boolean;
+  alignment_mode: AlignmentMode;
   glossary: string;
   global_context: string;
   per_file_context: string;
@@ -137,6 +140,8 @@ export interface AppSettings {
   default_provider: ProviderName;
   default_openrouter_model: string;
   default_align_with_whisperx: boolean;
+  default_alignment_mode: AlignmentMode;
+  max_parallel_cloud_jobs: number;
   glossary: string;
   subtitles: SubtitlePreferences;
   keep_temp_uploads: boolean;

@@ -168,8 +168,13 @@ def prepare_chunks(
     duration: float | None,
     cancel: CancellationToken | None = None,
     on_progress: Callable[[float], None] | None = None,
+    reuse_existing: bool = False,
 ) -> list[Chunk]:
-    """Detect silences, plan boundaries and encode every chunk to MP3."""
+    """Detect silences, plan boundaries and encode every chunk to MP3.
+
+    ``reuse_existing`` skips re-encoding when the chunk file already exists,
+    which makes a second pass (e.g. cloud anchor alignment) nearly free.
+    """
     from app.config import debug_mode
 
     if duration is None or duration <= 0:
@@ -196,7 +201,7 @@ def prepare_chunks(
         if cancel is not None:
             cancel.raise_if_cancelled()
         path = chunks_dir / f"chunk_{index:03d}.mp3"
-        if not (debug_mode() and path.exists()):
+        if not ((debug_mode() or reuse_existing) and path.exists()):
             encode_chunk(audio_path, path, start, end)
         chunks.append(Chunk(index=index, start=start, end=end, path=path))
         if on_progress is not None:

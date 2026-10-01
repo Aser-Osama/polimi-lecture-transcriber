@@ -71,13 +71,23 @@ async def create_jobs(request: Request, body: CreateJobsRequest) -> dict:
         (project.id, project.name, project.context) if project else None,
         per_file_context,
     )
+    alignment_mode = body.alignment_mode or (
+        "local_whisperx" if body.align_with_whisperx else "none"
+    )
+    if alignment_mode == "cloud" and body.provider != ProviderName.OPENROUTER:
+        raise HTTPException(
+            status_code=422,
+            detail="Cloud alignment requires the OpenRouter backend. "
+            "Select OpenRouter, or use local WhisperX alignment.",
+        )
     try:
         config = JobConfig(
             model_key=body.model_key,
             language=body.language,
             provider=body.provider,
             openrouter_model=body.openrouter_model,
-            align_with_whisperx=body.align_with_whisperx,
+            align_with_whisperx=alignment_mode == "local_whisperx",
+            alignment_mode=alignment_mode,
             glossary=resolved.effective,
             global_context=resolved.global_context,
             per_file_context=resolved.per_file_context,

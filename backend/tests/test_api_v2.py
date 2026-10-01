@@ -17,6 +17,21 @@ from tests.conftest import requires_ffmpeg
 
 class MockSTTHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
+        server = self.server
+        with server.lock:  # type: ignore[attr-defined]
+            server.active += 1  # type: ignore[attr-defined]
+            server.peak = max(server.peak, server.active)  # type: ignore[attr-defined]
+        try:
+            self._handle()
+        finally:
+            with server.lock:  # type: ignore[attr-defined]
+                server.active -= 1  # type: ignore[attr-defined]
+
+    def _handle(self) -> None:
+        server = self.server
+        delay = getattr(server, "delay", 0.0)
+        if delay:
+            time.sleep(delay)
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length))
         self.server.requests.append(  # type: ignore[attr-defined]
@@ -59,6 +74,10 @@ class MockSTTHandler(BaseHTTPRequestHandler):
 def mock_stt_server():
     server = ThreadingHTTPServer(("127.0.0.1", 0), MockSTTHandler)
     server.requests = []  # type: ignore[attr-defined]
+    server.lock = threading.Lock()  # type: ignore[attr-defined]
+    server.active = 0  # type: ignore[attr-defined]
+    server.peak = 0  # type: ignore[attr-defined]
+    server.delay = 0.0  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

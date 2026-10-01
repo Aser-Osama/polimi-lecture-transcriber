@@ -126,7 +126,8 @@ class JobConfig(BaseModel):
     language: LanguageChoice = LanguageChoice.ENGLISH
     provider: ProviderName = ProviderName.LOCAL_MLX
     openrouter_model: str | None = None
-    align_with_whisperx: bool = False
+    align_with_whisperx: bool = False  # legacy flag; see alignment_mode
+    alignment_mode: str = "none"  # none | local_whisperx | cloud
     # glossary holds the *effective* merged context (global + project + file).
     glossary: str = ""
     global_context: str = ""
@@ -153,6 +154,13 @@ class JobConfig(BaseModel):
             raise ValueError(f"unknown OpenRouter model: {value}")
         return value
 
+    @field_validator("alignment_mode")
+    @classmethod
+    def _known_alignment_mode(cls, value: str) -> str:
+        if value not in {"none", "local_whisperx", "cloud"}:
+            raise ValueError(f"unknown alignment mode: {value}")
+        return value
+
     @model_validator(mode="after")
     def _openrouter_default(self) -> JobConfig:
         from app.services.openrouter_models import DEFAULT_OPENROUTER_MODEL
@@ -160,6 +168,13 @@ class JobConfig(BaseModel):
         if self.provider == ProviderName.OPENROUTER and not self.openrouter_model:
             self.openrouter_model = DEFAULT_OPENROUTER_MODEL
         return self
+
+    @property
+    def effective_alignment_mode(self) -> str:
+        """Alignment mode with the legacy boolean flag folded in."""
+        if self.alignment_mode in {"local_whisperx", "cloud"}:
+            return self.alignment_mode
+        return "local_whisperx" if self.align_with_whisperx else "none"
 
 
 class Project(BaseModel):
@@ -211,6 +226,8 @@ class AppSettings(BaseModel):
     default_provider: ProviderName = ProviderName.LOCAL_MLX
     default_openrouter_model: str = "microsoft/mai-transcribe-2"
     default_align_with_whisperx: bool = False
+    default_alignment_mode: str = "none"  # none | local_whisperx | cloud
+    max_parallel_cloud_jobs: int = Field(default=3, ge=1, le=6)
     glossary: str = ""
     subtitles: SubtitlePreferences = Field(default_factory=SubtitlePreferences)
     keep_temp_uploads: bool = False
@@ -232,4 +249,11 @@ class AppSettings(BaseModel):
 
         if not is_known_openrouter_model(value):
             raise ValueError(f"unknown OpenRouter model: {value}")
+        return value
+
+    @field_validator("default_alignment_mode")
+    @classmethod
+    def _known_default_alignment(cls, value: str) -> str:
+        if value not in {"none", "local_whisperx", "cloud"}:
+            raise ValueError(f"unknown alignment mode: {value}")
         return value

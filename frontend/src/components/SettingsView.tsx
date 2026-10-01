@@ -200,17 +200,53 @@ export function SettingsView({
               <option value="auto">Auto Detect</option>
             </select>
           </div>
-          <div className="field checkbox-field">
-            <label>
-              <input
-                type="checkbox"
-                checked={draft.default_align_with_whisperx}
-                onChange={(event) =>
-                  setDraft({ ...draft, default_align_with_whisperx: event.target.checked })
-                }
-              />
-              Enable WhisperX alignment by default
-            </label>
+          <div className="field">
+            <label htmlFor="default-alignment">Default alignment</label>
+            <select
+              id="default-alignment"
+              value={
+                draft.default_alignment_mode !== "none"
+                  ? draft.default_alignment_mode
+                  : draft.default_align_with_whisperx
+                    ? "local_whisperx"
+                    : "none"
+              }
+              onChange={(event) => {
+                const value = event.target.value as AppSettings["default_alignment_mode"];
+                setDraft({
+                  ...draft,
+                  default_alignment_mode: value,
+                  default_align_with_whisperx: value === "local_whisperx",
+                });
+              }}
+            >
+              <option value="none">None</option>
+              <option value="cloud">Cloud (OpenRouter, MAI anchors when needed)</option>
+              <option value="local_whisperx">Local WhisperX</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="parallel-cloud">Parallel cloud jobs</label>
+            <select
+              id="parallel-cloud"
+              value={draft.max_parallel_cloud_jobs}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  max_parallel_cloud_jobs: Number(event.target.value) || 3,
+                })
+              }
+            >
+              {[1, 2, 3, 4, 5, 6].map((count) => (
+                <option key={count} value={count}>
+                  {count}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">
+              Jobs that run fully on OpenRouter (no local WhisperX) can run in parallel since
+              they do not use this Mac. Local jobs always run one at a time.
+            </p>
           </div>
         </div>
       </section>

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +48,7 @@ class CreateJobsRequest(BaseModel):
     provider: ProviderName = ProviderName.LOCAL_MLX
     openrouter_model: str | None = None
     align_with_whisperx: bool = False
+    alignment_mode: Literal["none", "local_whisperx", "cloud"] | None = None
     project_id: str | None = None
     per_file_context: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)

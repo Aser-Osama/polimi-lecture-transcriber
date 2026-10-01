@@ -242,6 +242,15 @@ class Database:
             ).fetchone()
         return self._row_to_job(row) if row else None
 
+    def list_queued_jobs(self) -> list[Job]:
+        """All queued jobs, oldest first (used by the parallel dispatcher)."""
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE status=? ORDER BY created_at ASC",
+                (JobStatus.QUEUED.value,),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
     def delete_job(self, job_id: str) -> bool:
         with self._lock, self._connection() as conn:
             cursor = conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
