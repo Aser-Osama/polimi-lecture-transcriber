@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app import capabilities
 from app.alignment.base import AlignmentProvider
 from app.alignment.cloud_anchor import CloudAnchorAligner
 from app.alignment.mlx_word_aligner import MLXWordTimestampAligner
@@ -381,6 +382,13 @@ def _align_transcription(
         )
 
     if mode != "local_whisperx":
+        outcome.words, outcome.provider = native_words, native_provider
+        return outcome
+
+    if not capabilities.local_alignment_supported():
+        outcome.warnings.append(
+            "Local WhisperX alignment is only available on macOS; native timestamps were kept."
+        )
         outcome.words, outcome.provider = native_words, native_provider
         return outcome
 

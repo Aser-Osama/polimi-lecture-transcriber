@@ -1,4 +1,4 @@
 APP_NAME = "Polimi Lecture Transcriber"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 RESULT_SCHEMA_VERSION = 3
 DB_SCHEMA_VERSION = 3

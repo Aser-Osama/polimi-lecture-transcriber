@@ -31,9 +31,11 @@ log = logging.getLogger("app.worker")
 def worker_entry(paths_dict: dict, cmd_queue, event_queue, provider_options: dict | None = None) -> None:
     """Runs in the child process (must stay a module-level function for spawn)."""
     # New session/process group so killpg() reaches FFmpeg children; skipping
-    # when already a session leader (e.g. running in a test thread).
-    with contextlib.suppress(OSError):
-        os.setsid()
+    # when already a session leader (e.g. running in a test thread). Not
+    # available on Windows, where terminate() reaches the child directly.
+    if os.name != "nt":
+        with contextlib.suppress(OSError):
+            os.setsid()
 
     logging.basicConfig(
         level=logging.INFO,

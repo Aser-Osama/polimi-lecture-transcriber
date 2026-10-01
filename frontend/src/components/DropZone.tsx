@@ -4,9 +4,10 @@ interface Props {
   onFiles: (files: File[]) => void;
   onPickFiles: () => void;
   busy: boolean;
+  nativePicker: boolean;
 }
 
-export function DropZone({ onFiles, onPickFiles, busy }: Props) {
+export function DropZone({ onFiles, onPickFiles, busy, nativePicker }: Props) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -55,19 +56,31 @@ export function DropZone({ onFiles, onPickFiles, busy }: Props) {
       </div>
       <p className="dropzone-title">
         Drop lecture video or audio here, or{" "}
-        <button
-          type="button"
-          className="link-btn"
-          onClick={onPickFiles}
-          disabled={busy}
-        >
-          choose files without copying
-        </button>
+        {nativePicker ? (
+          <button
+            type="button"
+            className="link-btn"
+            onClick={onPickFiles}
+            disabled={busy}
+          >
+            choose files without copying
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => inputRef.current?.click()}
+            disabled={busy}
+          >
+            browse files
+          </button>
+        )}
       </p>
       <p className="dropzone-hint">
-        MP4, MOV, MKV, WEBM, MP3, M4A, WAV, FLAC - batch supported. The native picker processes
-        original files in place; dropped files are copied to a temporary folder and removed after
-        processing.
+        MP4, MOV, MKV, WEBM, MP3, M4A, WAV, FLAC - batch supported.{" "}
+        {nativePicker
+          ? "The native picker processes original files in place; dropped files are copied to a temporary folder and removed after processing."
+          : "Selected and dropped files are copied to a temporary folder and removed after processing."}
       </p>
     </section>
   );

@@ -2,9 +2,12 @@
 
 A polished local macOS application that transcribes university lecture videos and audio files
 with Apple Silicon acceleration (MLX Whisper), producing accurate transcripts and
-word-timestamp-based SRT/WebVTT subtitles.
+word-timestamp-based SRT/WebVTT subtitles. On **Windows and Linux** the same app runs the
+**OpenRouter cloud path** (transcription + Cloud alignment); the local MLX/WhisperX options are
+macOS-only and are hidden automatically.
 
-Everything runs on your Mac. Nothing is uploaded anywhere.
+On macOS everything runs on your Mac by default. Nothing is uploaded anywhere unless you pick
+the OpenRouter backend.
 
 > Screenshot placeholder: `docs/screenshot.png` (main window: drop area, options, job queue).
 
@@ -36,18 +39,39 @@ Everything runs on your Mac. Nothing is uploaded anywhere.
 
 ## Requirements
 
+macOS (local + cloud):
+
 - macOS on Apple Silicon (built and verified on an M5 Pro / 48 GB, macOS 26)
 - Python 3.11 or 3.12
 - Node.js 20+ and npm
 - FFmpeg + ffprobe (`brew install ffmpeg`)
 - ~4 GB free disk for the default Quality model (cached under the standard Hugging Face cache)
 
+Windows / Linux (cloud-only):
+
+- Windows 10/11 or a modern Linux distribution
+- Python 3.11 or 3.12
+- Node.js 20+ and npm (only needed to build the interface)
+- FFmpeg + ffprobe (`winget install Gyan.FFmpeg` / `sudo apt install ffmpeg`)
+- An OpenRouter API key (Settings → OpenRouter)
+
 ## Installation
 
 ```bash
 git clone <your-repo-url> && cd Polimi-Lecture-Transcriber
-./setup.sh                  # verifies platform/tools, creates .venv, installs deps, builds UI
+./setup.sh                  # macOS: verifies platform/tools, creates .venv, installs deps, builds UI
 ```
+
+On **Windows and Linux** use the cross-platform launcher instead of `setup.sh`/`run.sh`:
+
+```bash
+python run.py --check       # verify Python/Node/FFmpeg and print platform capabilities
+python run.py               # first run sets up .venv, installs deps, builds the UI, starts the app
+```
+
+`run.py` is also the recommended entry point on macOS; it mirrors `./run.sh`. Flags:
+`--check` (prerequisites only), `--no-browser`, `--skip-build`. `PT_HOST`/`PT_PORT` are honored
+on every platform.
 
 `setup.sh` never installs Homebrew silently. If FFmpeg is missing it prints
 `brew install ffmpeg` and exits; you can also run `./setup.sh --install-ffmpeg` to have it run
@@ -56,13 +80,33 @@ that command for you.
 ### First launch
 
 ```bash
-./run.sh
+./run.sh          # macOS
+python run.py     # Windows / Linux / macOS
 ```
 
 This starts the backend on `http://127.0.0.1:8765`, serves the built interface and opens your
 browser. The first transcription downloads the selected model into the standard Hugging Face
 cache (`~/.cache/huggingface/hub`) — the UI shows "Downloading model (first use)" while it
 happens. Nothing else is downloaded at install time.
+
+## Windows and Linux (cloud-only)
+
+The app detects the platform and adapts the whole UI:
+
+- **Backend**: OpenRouter only (Local MLX Whisper is not offered)
+- **Alignment**: `None` and `Cloud` (Cloud uses the chosen model's native word timestamps or a
+  MAI-Transcribe 2 anchor pass — see below); Local WhisperX is not offered
+- **API key storage**: no Keychain on these platforms, so the key is kept in a user-only file
+  (`openrouter.key`, permissions 0600) inside the app data folder
+  (`%APPDATA%\Polimi Lecture Transcriber` on Windows,
+  `~/.local/share/Polimi Lecture Transcriber` on Linux; override with `PT_DATA_DIR`)
+- **File selection**: drag & drop or the browser file picker (the macOS native picker is not
+  available); dropped files are copied to a temporary folder
+- **Model downloads, WhisperX install and local model settings** are hidden
+
+Everything else (queue, parallel cloud jobs, history, preview, subtitles, courses/projects,
+cost tracking) works exactly like on macOS. `PT_SIMULATE_PLATFORM=win32|linux` forces the
+cloud-only mode on any machine (development/tests only).
 
 ## Models
 
@@ -280,7 +324,12 @@ downloading open-source models from Hugging Face and WhisperX alignment models w
 
 If you explicitly select the **OpenRouter backend**, the prepared audio *is* uploaded to
 OpenRouter for transcription (that is the point of the feature) and billed per second. Nothing
-is uploaded unless you choose that backend, and no other data ever leaves the machine.
+is uploaded unless you choose that backend, and no other data ever leaves the machine. On
+Windows/Linux, where the cloud path is the only backend, the UI says so explicitly.
+
+The OpenRouter API key is stored in the macOS Keychain on macOS and in a user-only file
+(0600) inside the app data folder on Windows/Linux. It is never written to the database, logs
+or the browser, and is never sent anywhere except OpenRouter as the `Authorization` header.
 
 ## Testing
 
@@ -339,8 +388,13 @@ fake provider), `HF_HOME` (model cache override), `PT_OPENROUTER_BASE_URL` (test
   backend or use Local WhisperX.
 - **WhisperX install fails** — check the log; usually a network hiccup during the pip install.
   Press Install again (the installer is idempotent).
-- **Where are the details?** — `~/Library/Logs/Polimi Lecture Transcriber/app.log`
-  (Settings → Reveal logs).
+- **Local options missing (Windows/Linux)** — expected: local MLX Whisper and WhisperX are
+  macOS-only; the app shows the OpenRouter cloud path only. Cloud alignment is fully available.
+- **`run.py` cannot create the virtual environment (Linux)** — install the venv package first
+  (`sudo apt install python3-venv`) and re-run.
+- **Where are the details?** — `~/Library/Logs/Polimi Lecture Transcriber/app.log` on macOS,
+  `%LOCALAPPDATA%\Polimi Lecture Transcriber\Logs` on Windows,
+  `~/.local/state/Polimi Lecture Transcriber/logs` on Linux (Settings → Reveal logs).
 
 ## Future: Vast.ai provider
 

@@ -95,6 +95,7 @@ export interface AlignmentInstallState {
 
 export interface AlignmentStatus {
   installed: boolean;
+  supported?: boolean;
   venv_path: string;
   venv_exists: boolean;
   script_exists: boolean;
@@ -185,12 +186,22 @@ export interface PreviewData {
   outputs: Record<string, string>;
 }
 
+export interface Capabilities {
+  platform: string;
+  platform_label: string;
+  local_transcription: boolean;
+  local_alignment: boolean;
+  native_file_picker: boolean;
+  key_storage: "keychain" | "file";
+}
+
 export interface Health {
   status: string;
   app_version: string;
   result_schema_version: number;
   ffmpeg: { ok: boolean; info: string | null };
-  mlx_provider: { ok: boolean; error: string | null };
+  mlx_provider: { ok: boolean; error: string | null; supported?: boolean };
+  capabilities: Capabilities;
   active_job_id: string | null;
 }
 

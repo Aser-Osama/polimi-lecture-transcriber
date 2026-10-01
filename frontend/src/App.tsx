@@ -72,6 +72,10 @@ export default function App() {
 
   const { jobs, connection, fractions, modelDownloads, alignmentInstall } = useJobs();
 
+  const capabilities = health?.capabilities ?? null;
+  const localSupported = capabilities?.local_transcription ?? true;
+  const nativePicker = capabilities?.native_file_picker ?? true;
+
   const toast = useCallback((message: string, kind: "info" | "error" = "info") => {
     const id = ++toastCounter;
     setToasts((current) => [...current, { id, message, kind }]);
@@ -132,6 +136,12 @@ export default function App() {
     loadAlignment().catch(() => undefined);
     loadProjects().catch((error: Error) => toast(error.message, "error"));
   }, [loadSettings, loadModels, loadAlignment, loadProjects, toast]);
+
+  useEffect(() => {
+    if (!capabilities || capabilities.local_transcription) return;
+    setBackend((current) => (current === "local_mlx" ? "openrouter" : current));
+    setAlignmentMode((current) => (current === "local_whisperx" ? "cloud" : current));
+  }, [capabilities, settingsBundle]);
 
   useEffect(() => {
     if (alignmentInstall?.state === "completed") {
@@ -249,6 +259,7 @@ export default function App() {
 
   const handleBackendChange = useCallback(
     (value: BackendChoice) => {
+      if (value === "local_mlx" && !localSupported) return;
       setBackend(value);
       if (value === "local_mlx" && alignmentMode === "cloud") {
         setAlignmentMode("none");
@@ -259,7 +270,7 @@ export default function App() {
         setAlignmentMode("cloud");
       }
     },
-    [alignmentMode, toast],
+    [alignmentMode, localSupported, toast],
   );
 
   const handleAlignmentModeChange = useCallback(
@@ -302,6 +313,9 @@ export default function App() {
       <AppShell health={health} view={view} setView={setView} connection={connection}>
         <SettingsView
           settings={settingsBundle.settings}
+          localSupported={localSupported}
+          platformLabel={capabilities?.platform_label ?? ""}
+          keyStorage={capabilities?.key_storage ?? "keychain"}
           defaultOutputDir={settingsBundle.default_output_dir}
           resolvedOutputDir={settingsBundle.resolved_output_dir}
           models={models}
@@ -331,7 +345,12 @@ export default function App() {
     <AppShell health={health} view={view} setView={setView} connection={connection}>
       {view === "transcribe" && (
         <>
-          <DropZone onFiles={(files) => void handleDroppedFiles(files)} onPickFiles={() => void handlePickFiles()} busy={picking} />
+          <DropZone
+            onFiles={(files) => void handleDroppedFiles(files)}
+            onPickFiles={() => void handlePickFiles()}
+            busy={picking}
+            nativePicker={nativePicker}
+          />
           {uploads.length > 0 && (
             <section className="panel uploads-panel" aria-label="Uploading files">
               <h2 className="panel-title">Copying files to temporary storage</h2>
@@ -349,6 +368,7 @@ export default function App() {
           <SelectedFiles items={selected} onRemove={(key) => setSelected((current) => current.filter((item) => item.key !== key))} />
           <OptionsBar
             backend={backend}
+            localSupported={localSupported}
             language={language}
             modelKey={modelKey}
             openrouterModel={openrouterModel}
@@ -460,16 +480,23 @@ function AppShell({
   setView: (view: ViewName) => void;
   connection: import("./types").ConnectionState;
 }) {
+  const ffmpegHint =
+    health?.capabilities.platform === "win32"
+      ? "winget install Gyan.FFmpeg"
+      : health?.capabilities.platform === "linux"
+        ? "sudo apt install ffmpeg"
+        : "brew install ffmpeg";
+  const mlxSupported = health?.mlx_provider.supported !== false;
   return (
     <div className="app">
       <TopBar view={view} onNavigate={setView} connection={connection} />
       {health && !health.ffmpeg.ok && (
         <div className="banner banner-error" role="alert">
-          <strong>FFmpeg is missing.</strong> Install it with <code>brew install ffmpeg</code> and
+          <strong>FFmpeg is missing.</strong> Install it with <code>{ffmpegHint}</code> and
           restart the app. ({health.ffmpeg.info})
         </div>
       )}
-      {health && !health.mlx_provider.ok && (
+      {health && mlxSupported && !health.mlx_provider.ok && (
         <div className="banner banner-error" role="alert">
           <strong>MLX Whisper is unavailable.</strong> Run <code>./setup.sh</code> to repair the
           Python environment. ({health.mlx_provider.error})

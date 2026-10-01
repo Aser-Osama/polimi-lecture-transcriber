@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
+from app import capabilities
 from app.api.deps import get_paths
 from app.api.schemas import PickResponse, PickResult, ProbeRequest, UploadResponse
 from app.core.errors import AppError
@@ -118,6 +119,12 @@ async def upload_media(request: Request, file: UploadFile = File(...)) -> Upload
 
 @router.post("/pick", response_model=PickResponse)
 async def pick_files(request: Request) -> PickResponse:
+    if not capabilities.native_file_picker_supported():
+        raise HTTPException(
+            status_code=400,
+            detail="The native file picker is only available on macOS. "
+            "Drag and drop files or use the browser file picker instead.",
+        )
     selected = await asyncio.to_thread(
         pick_files_native, "Select lecture video or audio files"
     )

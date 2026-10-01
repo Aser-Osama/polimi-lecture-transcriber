@@ -1,7 +1,9 @@
-"""Subprocess and macOS integration helpers.
+"""Subprocess and desktop integration helpers.
 
 All external commands are executed with argument arrays; no shell strings are
-ever assembled from user input.
+ever assembled from user input. Desktop actions (reveal in file manager, native
+file picker) are implemented per platform; features that only exist on macOS
+report their capability via :mod:`app.capabilities` and are hidden by the UI.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -48,11 +51,27 @@ def run_command(
 
 
 def open_in_finder(path: Path) -> bool:
-    """Reveal a file in Finder (or open a directory)."""
-    target = str(path)
-    args = ["open", "-R", target] if path.is_file() else ["open", target]
+    """Reveal a file in the file manager (or open a directory)."""
     try:
-        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if sys.platform == "darwin":
+            args = ["open", "-R", str(path)] if path.is_file() else ["open", str(path)]
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == "win32":
+            if path.is_file():
+                subprocess.Popen(
+                    ["explorer", f"/select,{path}"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                os.startfile(str(path))  # type: ignore[attr-defined]
+        else:
+            target = path if path.is_dir() else path.parent
+            subprocess.Popen(
+                ["xdg-open", str(target)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         return True
     except OSError:
         log.exception("Failed to reveal %s", path)
@@ -61,9 +80,16 @@ def open_in_finder(path: Path) -> bool:
 
 def open_external(path: Path) -> bool:
     try:
-        subprocess.Popen(
-            ["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        if sys.platform == "darwin":
+            subprocess.Popen(
+                ["open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        elif sys.platform == "win32":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(
+                ["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
         return True
     except OSError:
         log.exception("Failed to open %s", path)
@@ -71,7 +97,14 @@ def open_external(path: Path) -> bool:
 
 
 def pick_files_native(prompt: str) -> list[Path]:
-    """Open the macOS native file picker and return chosen paths (no copying)."""
+    """Open the macOS native file picker and return chosen paths (no copying).
+
+    Returns an empty list on other platforms; callers expose a capability flag
+    so the UI hides this option there.
+    """
+    if sys.platform != "darwin":
+        log.info("Native file picker requested on %s; not supported", sys.platform)
+        return []
     try:
         result = subprocess.run(
             ["osascript", "-e", _PICKER_SCRIPT, prompt],
@@ -90,7 +123,19 @@ def pick_files_native(prompt: str) -> list[Path]:
 
 
 def kill_process_group(pid: int, sig: int = signal.SIGTERM) -> None:
-    """Signal the whole process group of a child started with start_new_session."""
+    """Terminate a child process (and, on POSIX, its whole process group).
+
+    Workers call ``os.setsid()`` on POSIX so this reaches FFmpeg grandchildren.
+    Windows has no process groups; ``os.kill`` maps to TerminateProcess.
+    """
+    if os.name == "nt":
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            log.exception("Failed to signal process %s", pid)
+        return
     try:
         os.killpg(os.getpgid(pid), sig)
     except ProcessLookupError:

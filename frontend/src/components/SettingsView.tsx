@@ -16,6 +16,9 @@ import { PrivacyNote } from "./PrivacyNote";
 
 interface Props {
   settings: AppSettings;
+  localSupported: boolean;
+  platformLabel: string;
+  keyStorage: "keychain" | "file";
   defaultOutputDir: string;
   resolvedOutputDir: string;
   models: ModelInfo[];
@@ -35,6 +38,9 @@ interface Props {
 
 export function SettingsView({
   settings,
+  localSupported,
+  platformLabel,
+  keyStorage,
   defaultOutputDir,
   resolvedOutputDir,
   models,
@@ -150,24 +156,31 @@ export function SettingsView({
                 })
               }
             >
-              <option value="local_mlx">Local</option>
+              {localSupported && <option value="local_mlx">Local</option>}
               <option value="openrouter">OpenRouter</option>
             </select>
+            {!localSupported && (
+              <p className="field-hint">
+                Local MLX Whisper is available on macOS only; this platform uses OpenRouter.
+              </p>
+            )}
           </div>
-          <div className="field">
-            <label htmlFor="default-model">Local model</label>
-            <select
-              id="default-model"
-              value={draft.default_model_key}
-              onChange={(event) => setDraft({ ...draft, default_model_key: event.target.value })}
-            >
-              {models.map((model) => (
-                <option key={model.key} value={model.key}>
-                  {model.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {localSupported && (
+            <div className="field">
+              <label htmlFor="default-model">Local model</label>
+              <select
+                id="default-model"
+                value={draft.default_model_key}
+                onChange={(event) => setDraft({ ...draft, default_model_key: event.target.value })}
+              >
+                {models.map((model) => (
+                  <option key={model.key} value={model.key}>
+                    {model.display_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="field">
             <label htmlFor="default-openrouter-model">OpenRouter model</label>
             <select
@@ -222,7 +235,7 @@ export function SettingsView({
             >
               <option value="none">None</option>
               <option value="cloud">Cloud (OpenRouter, MAI anchors when needed)</option>
-              <option value="local_whisperx">Local WhisperX</option>
+              {localSupported && <option value="local_whisperx">Local WhisperX</option>}
             </select>
           </div>
           <div className="field">
@@ -254,9 +267,12 @@ export function SettingsView({
       <section className="panel" aria-label="OpenRouter">
         <h2 className="panel-title">OpenRouter</h2>
         <p className="field-hint">
-          Cloud transcription via OpenRouter. The key is stored in the macOS Keychain — it never
-          touches the app database, logs or this browser. Long lectures are split into
-          silence-aligned chunks because providers time out after ~60 s per request.
+          Cloud transcription via OpenRouter.{" "}
+          {keyStorage === "keychain"
+            ? "The key is stored in the macOS Keychain — it never touches the app database, logs or this browser."
+            : "The key is stored in a user-only file inside the app data folder — it never touches the app database, logs or this browser."}{" "}
+          Long lectures are split into silence-aligned chunks because providers time out after
+          ~60 s per request.
         </p>
         <div className="field">
           <label htmlFor="openrouter-key">API key</label>
@@ -280,7 +296,11 @@ export function SettingsView({
                   .then(() => {
                     setKeyInput("");
                     onKeyChanged();
-                    onToast("OpenRouter key stored in macOS Keychain.");
+                    onToast(
+                      keyStorage === "keychain"
+                        ? "OpenRouter key stored in macOS Keychain."
+                        : "OpenRouter key stored in the app data folder.",
+                    );
                   })
                   .catch((error: Error) => onToast(error.message, "error"))
                   .finally(() => setKeyBusy(false));
@@ -308,13 +328,16 @@ export function SettingsView({
           </div>
           <p className="field-hint">
             {hasOpenRouterKey
-              ? "A key is stored in the login Keychain (service PolimiLectureTranscriber)."
+              ? keyStorage === "keychain"
+                ? "A key is stored in the login Keychain (service PolimiLectureTranscriber)."
+                : "A key is stored in the app data folder (user-only permissions)."
               : "No key stored yet."}
           </p>
         </div>
       </section>
 
-      <section className="panel" aria-label="WhisperX alignment">
+      {localSupported && (
+        <section className="panel" aria-label="WhisperX alignment">
         <div className="panel-header">
           <h2 className="panel-title">WhisperX alignment</h2>
           <span className={alignmentStatus?.installed ? "chip chip-ok" : "chip chip-muted"}>
@@ -364,6 +387,18 @@ export function SettingsView({
           )}
         </div>
       </section>
+      )}
+
+      {!localSupported && (
+        <section className="panel" aria-label="Platform">
+          <h2 className="panel-title">Platform: {platformLabel}</h2>
+          <p className="field-hint">
+            This platform runs the OpenRouter cloud path only. Local MLX Whisper transcription,
+            WhisperX alignment and local model downloads are macOS-only. Cloud transcription and
+            Cloud alignment are fully supported here.
+          </p>
+        </section>
+      )}
 
       <section className="panel" aria-label="Global context">
         <h2 className="panel-title">Global context</h2>
@@ -637,12 +672,13 @@ export function SettingsView({
                 setDraft({ ...draft, reveal_outputs_on_finish: event.target.checked })
               }
             />
-            Reveal the output folder in Finder when a job finishes
+            Reveal the output folder in the file manager when a job finishes
           </label>
         </div>
       </section>
 
-      <section className="panel" aria-label="Whisper models">
+      {localSupported && (
+        <section className="panel" aria-label="Whisper models">
         <div className="panel-header">
           <h2 className="panel-title">Models</h2>
           <button type="button" className="btn btn-ghost" onClick={() => reveal("model_cache")}>
@@ -718,6 +754,7 @@ export function SettingsView({
           batch jobs.
         </p>
       </section>
+      )}
 
       <div className="settings-footer">
         <button
@@ -730,7 +767,7 @@ export function SettingsView({
         </button>
         {dirty && <span className="field-hint">Unsaved changes</span>}
       </div>
-      <PrivacyNote />
+      <PrivacyNote cloudOnly={!localSupported} />
     </div>
   );
 }

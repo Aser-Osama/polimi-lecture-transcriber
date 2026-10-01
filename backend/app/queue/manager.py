@@ -44,6 +44,10 @@ from app.utils.proc import kill_process_group, open_in_finder
 
 log = logging.getLogger(__name__)
 
+# Windows has no SIGKILL; TerminateProcess via os.kill(SIGTERM) is already
+# forceful there.
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
 CANCEL_GRACE_SECONDS = 5.0
 WORKER_SWEEP_INTERVAL = 0.3
 DISPATCH_POLL_SECONDS = 0.2
@@ -108,7 +112,7 @@ class SubprocessWorkerHandle:
         kill_process_group(self.pid, signal.SIGTERM)
         self._process.join(timeout=3)
         if self._process.is_alive():
-            kill_process_group(self.pid, signal.SIGKILL)
+            kill_process_group(self.pid, _SIGKILL)
             self._process.join(timeout=3)
 
     def shutdown(self) -> None:

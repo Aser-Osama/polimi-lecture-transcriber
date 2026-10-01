@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app import capabilities
 from app.api.deps import ModelDownloadTracker, get_bus, get_download_tracker
 from app.core.errors import ModelDownloadError
 from app.providers.base import CancellationToken
@@ -33,17 +34,25 @@ async def list_openrouter_models() -> dict:
 
 @router.get("")
 async def list_models(request: Request) -> dict:
+    if not capabilities.local_transcription_supported():
+        return {"models": [], "supported": False}
     tracker = get_download_tracker(request)
     models = []
     for entry in model_choices():
         key = entry["key"]
         state = tracker.states.get(key, {"state": "idle"})
         models.append({**entry, "cached": is_model_cached(entry["repo_id"]), "download": state})
-    return {"models": models}
+    return {"models": models, "supported": True}
 
 
 @router.post("/{key}/download")
 async def download(request: Request, key: str) -> dict:
+    if not capabilities.local_transcription_supported():
+        raise HTTPException(
+            status_code=400,
+            detail="Local Whisper models are only available on macOS. "
+            "Use the OpenRouter backend on this platform.",
+        )
     if key not in MODEL_CATALOG:
         raise HTTPException(status_code=404, detail="Unknown model.")
     spec = get_model_spec(key)

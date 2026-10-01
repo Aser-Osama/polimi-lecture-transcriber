@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from app import capabilities
 from app.core.errors import AppError
 from app.providers.base import CancellationToken
 
@@ -37,12 +38,26 @@ class WhisperXInstallError(AppError):
 
 
 def venv_python(venv: Path | None = None) -> Path:
-    return (venv or WHISPERX_VENV) / "bin" / "python"
+    base = venv or WHISPERX_VENV
+    if os.name == "nt":
+        return base / "Scripts" / "python.exe"
+    return base / "bin" / "python"
 
 
 def whisperx_status(force: bool = False, venv: Path | None = None) -> dict:
     """Inspect the alignment environment (cached briefly)."""
     global _status_cache
+    if not capabilities.local_alignment_supported():
+        return {
+            "installed": False,
+            "supported": False,
+            "venv_path": str(venv or WHISPERX_VENV),
+            "venv_exists": False,
+            "script_exists": ALIGN_SCRIPT.is_file(),
+            "device": None,
+            "version": None,
+            "message": "WhisperX alignment is only available on macOS.",
+        }
     now = time.monotonic()
     if not force and _status_cache is not None and now - _status_cache[0] < _STATUS_CACHE_SECONDS:
         return _status_cache[1]
@@ -50,6 +65,7 @@ def whisperx_status(force: bool = False, venv: Path | None = None) -> dict:
     python = venv_python(venv)
     status: dict = {
         "installed": False,
+        "supported": True,
         "venv_path": str(venv or WHISPERX_VENV),
         "venv_exists": python.exists(),
         "script_exists": ALIGN_SCRIPT.is_file(),
@@ -103,6 +119,12 @@ def install_whisperx(
     venv: Path | None = None,
 ) -> None:
     """Create the isolated venv and install whisperx into it (idempotent)."""
+    if not capabilities.local_alignment_supported():
+        raise WhisperXInstallError(
+            "WhisperX alignment is only available on macOS.",
+            user_message="WhisperX forced alignment is only available on macOS. "
+            "On this platform, use Cloud alignment with the OpenRouter backend.",
+        )
     target = venv or WHISPERX_VENV
     python = venv_python(target)
 

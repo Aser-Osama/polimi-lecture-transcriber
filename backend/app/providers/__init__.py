@@ -1,3 +1,4 @@
+from app import capabilities
 from app.providers.base import (
     CancellationToken,
     ProgressCallback,
@@ -17,6 +18,11 @@ _PROVIDERS: dict[str, type[TranscriptionProvider]] = {
 
 
 def create_provider(name: str) -> TranscriptionProvider:
+    if name == LocalMLXProvider.name and not capabilities.local_transcription_supported():
+        raise ValueError(
+            "Local transcription (MLX Whisper) is only available on macOS. "
+            "Use the OpenRouter backend on this platform."
+        )
     try:
         provider_cls = _PROVIDERS[name]
     except KeyError:
@@ -25,7 +31,11 @@ def create_provider(name: str) -> TranscriptionProvider:
 
 
 def provider_names() -> list[str]:
-    return list(_PROVIDERS)
+    return [
+        name
+        for name in _PROVIDERS
+        if name != LocalMLXProvider.name or capabilities.local_transcription_supported()
+    ]
 
 
 __all__ = [

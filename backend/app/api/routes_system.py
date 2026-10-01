@@ -9,6 +9,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app import capabilities
 from app.api.deps import get_bus, get_manager, get_paths
 from app.api.schemas import RevealRequest
 from app.core.errors import AppError
@@ -30,19 +31,26 @@ def _sse(payload: dict) -> str:
 @router.get("/health")
 async def health(request: Request) -> dict:
     ffmpeg_ok, ffmpeg_info = media_service.check_ffmpeg()
+    local_supported = capabilities.local_transcription_supported()
     provider_ok = True
     provider_error = None
-    try:
-        import mlx_whisper  # noqa: F401
-    except ImportError as exc:
-        provider_ok = False
-        provider_error = str(exc)
+    if local_supported:
+        try:
+            import mlx_whisper  # noqa: F401
+        except ImportError as exc:
+            provider_ok = False
+            provider_error = str(exc)
     return {
         "status": "ok",
         "app_version": APP_VERSION,
         "result_schema_version": RESULT_SCHEMA_VERSION,
         "ffmpeg": {"ok": ffmpeg_ok, "info": ffmpeg_info},
-        "mlx_provider": {"ok": provider_ok, "error": provider_error},
+        "mlx_provider": {
+            "ok": provider_ok,
+            "error": provider_error,
+            "supported": local_supported,
+        },
+        "capabilities": capabilities.capabilities(),
         "active_job_id": get_manager(request).active_job_id,
     }
 
@@ -88,6 +96,12 @@ async def alignment_status(request: Request) -> dict:
 
 @router.post("/alignment/install")
 async def alignment_install(request: Request) -> dict:
+    if not capabilities.local_alignment_supported():
+        raise HTTPException(
+            status_code=400,
+            detail="WhisperX alignment is only available on macOS. "
+            "Use Cloud alignment with the OpenRouter backend.",
+        )
     state = getattr(request.app.state, "alignment_install", None)
     if state is None:
         state = {"state": "idle", "message": None}
@@ -157,5 +171,5 @@ async def reveal(request: Request, body: RevealRequest) -> dict:
         raise HTTPException(status_code=404, detail=f"Folder does not exist: {target}")
     ok = await asyncio.to_thread(open_in_finder, target)
     if not ok:
-        raise HTTPException(status_code=500, detail="Could not open Finder.")
+        raise HTTPException(status_code=500, detail="Could not open the folder.")
     return {"opened": str(target)}

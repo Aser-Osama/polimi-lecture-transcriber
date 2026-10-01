@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import queue as std_queue
 import select
 import shutil
 import subprocess
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
+from app import capabilities
 from app.core.errors import (
     FFmpegMissingError,
     InsufficientDiskSpaceError,
@@ -60,10 +63,23 @@ def check_ffmpeg() -> tuple[bool, str | None]:
     return True, ffmpeg_info
 
 
+def ffmpeg_install_hint() -> str:
+    platform = capabilities.sys_platform()
+    if platform == "darwin":
+        return "brew install ffmpeg"
+    if platform == "win32":
+        return "winget install Gyan.FFmpeg"
+    return "sudo apt install ffmpeg (or your distribution's package manager)"
+
+
 def ensure_ffmpeg() -> None:
     ok, info = check_ffmpeg()
     if not ok:
-        raise FFmpegMissingError(f"FFmpeg preflight failed: {info}")
+        raise FFmpegMissingError(
+            f"FFmpeg preflight failed: {info}",
+            user_message=f"FFmpeg is not installed. Install it with: {ffmpeg_install_hint()} — "
+            "then restart the app.",
+        )
 
 
 def probe_media(path: Path) -> MediaInfo:
@@ -231,19 +247,8 @@ def extract_audio(
     stderr_thread.start()
 
     try:
-        assert process.stdout is not None
-        while True:
-            if token.cancelled:
-                raise _cancelled()
-            ready, _, _ = select.select([process.stdout], [], [], 0.2)
-            if not ready:
-                if process.poll() is not None:
-                    break
-                continue
-            line = process.stdout.readline()
-            if not line:
-                break
-            line = line.strip()
+        for raw_line in _progress_lines(process, token):
+            line = raw_line.strip()
             if line.startswith("out_time_us=") and on_progress:
                 us = line.split("=", 1)[1]
                 try:
@@ -281,6 +286,53 @@ def extract_audio(
             "ffmpeg reported success but produced no audio",
             user_message="No audio could be extracted from this file.",
         )
+
+
+def _progress_lines(process: subprocess.Popen, token: CancellationToken) -> Iterator[str]:
+    """Yield ffmpeg ``-progress`` lines, checking cancellation between reads.
+
+    POSIX: poll the pipe with ``select``. Windows: ``select`` cannot poll pipes,
+    so a reader thread feeds a queue while the loop polls for cancellation.
+    """
+    assert process.stdout is not None
+    if os.name == "nt":
+        lines: std_queue.Queue[str | None] = std_queue.Queue()
+
+        def reader() -> None:
+            try:
+                for line in process.stdout:  # type: ignore[union-attr]
+                    lines.put(line)
+            except ValueError:
+                pass
+            finally:
+                lines.put(None)
+
+        threading.Thread(target=reader, daemon=True).start()
+        while True:
+            if token.cancelled:
+                return
+            try:
+                line = lines.get(timeout=0.2)
+            except std_queue.Empty:
+                if process.poll() is not None:
+                    return
+                continue
+            if line is None:
+                return
+            yield line
+    else:
+        while True:
+            if token.cancelled:
+                return
+            ready, _, _ = select.select([process.stdout], [], [], 0.2)
+            if not ready:
+                if process.poll() is not None:
+                    return
+                continue
+            line = process.stdout.readline()
+            if not line:
+                return
+            yield line
 
 
 def _terminate(process: subprocess.Popen) -> None:

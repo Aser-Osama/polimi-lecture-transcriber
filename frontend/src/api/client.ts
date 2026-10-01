@@ -137,7 +137,7 @@ export const api = {
 
   preview: (jobId: string) => request<PreviewData>(`/api/jobs/${jobId}/preview`),
 
-  listModels: () => request<{ models: ModelInfo[] }>("/api/models"),
+  listModels: () => request<{ models: ModelInfo[]; supported?: boolean }>("/api/models"),
 
   listProjects: () => request<{ projects: Project[] }>("/api/projects"),
 

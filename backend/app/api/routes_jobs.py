@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
+from app import capabilities
 from app.api.deps import get_db, get_manager, get_paths, get_settings_store
 from app.api.routes_media import resolve_upload_path
 from app.api.schemas import CreateJobsRequest, RegenerateRequest
@@ -74,6 +75,18 @@ async def create_jobs(request: Request, body: CreateJobsRequest) -> dict:
     alignment_mode = body.alignment_mode or (
         "local_whisperx" if body.align_with_whisperx else "none"
     )
+    if not capabilities.local_transcription_supported() and body.provider == ProviderName.LOCAL_MLX:
+        raise HTTPException(
+            status_code=422,
+            detail="Local transcription (MLX Whisper) is only available on macOS. "
+            "Use the OpenRouter backend on this platform.",
+        )
+    if not capabilities.local_alignment_supported() and alignment_mode == "local_whisperx":
+        raise HTTPException(
+            status_code=422,
+            detail="Local WhisperX alignment is only available on macOS. "
+            "Use Cloud alignment with the OpenRouter backend on this platform.",
+        )
     if alignment_mode == "cloud" and body.provider != ProviderName.OPENROUTER:
         raise HTTPException(
             status_code=422,

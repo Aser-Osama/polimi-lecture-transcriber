@@ -1,7 +1,8 @@
 """Application paths and defaults.
 
-Follows normal macOS conventions. Every path can be overridden with environment
-variables so tests never touch the real user directories.
+Follows normal per-platform conventions: Application Support on macOS, APPDATA
+on Windows, XDG directories on Linux. Every path can be overridden with
+environment variables so tests never touch the real user directories.
 """
 
 from __future__ import annotations
@@ -10,12 +11,36 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.capabilities import sys_platform
+
 APP_SLUG = "Polimi Lecture Transcriber"
 
 
 def _env_path(name: str, default: Path) -> Path:
     raw = os.environ.get(name)
     return Path(raw).expanduser() if raw else default
+
+
+def _default_data_dir() -> Path:
+    platform = sys_platform()
+    if platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_SLUG
+    if platform == "win32":
+        base = os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
+        return Path(base) / APP_SLUG
+    base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    return Path(base) / APP_SLUG
+
+
+def _default_logs_dir() -> Path:
+    platform = sys_platform()
+    if platform == "darwin":
+        return Path.home() / "Library" / "Logs" / APP_SLUG
+    if platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+        return Path(base) / APP_SLUG / "Logs"
+    base = os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
+    return Path(base) / APP_SLUG / "logs"
 
 
 @dataclass(frozen=True)
@@ -28,10 +53,8 @@ class AppPaths:
 
     @classmethod
     def from_env(cls) -> AppPaths:
-        data_dir = _env_path(
-            "PT_DATA_DIR", Path.home() / "Library" / "Application Support" / APP_SLUG
-        )
-        logs_dir = _env_path("PT_LOGS_DIR", Path.home() / "Library" / "Logs" / APP_SLUG)
+        data_dir = _env_path("PT_DATA_DIR", _default_data_dir())
+        logs_dir = _env_path("PT_LOGS_DIR", _default_logs_dir())
         temp_dir = _env_path("PT_TEMP_DIR", data_dir / "tmp")
         default_output_dir = _env_path(
             "PT_OUTPUT_DIR", Path.home() / "Documents" / "Polimi Transcripts"

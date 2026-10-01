@@ -20,6 +20,7 @@ function countTerms(text: string): number {
 
 interface Props {
   backend: BackendChoice;
+  localSupported: boolean;
   language: LanguageChoice;
   modelKey: string;
   openrouterModel: string;
@@ -48,6 +49,7 @@ interface Props {
 
 export function OptionsBar({
   backend,
+  localSupported,
   language,
   modelKey,
   openrouterModel,
@@ -90,16 +92,18 @@ export function OptionsBar({
           Transcription backend
         </span>
         <div className="segmented" role="radiogroup" aria-labelledby="backend-label">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={backend === "local_mlx"}
-            className={backend === "local_mlx" ? "segment active" : "segment"}
-            disabled={disabled}
-            onClick={() => onBackendChange("local_mlx")}
-          >
-            Local
-          </button>
+          {localSupported && (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={backend === "local_mlx"}
+              className={backend === "local_mlx" ? "segment active" : "segment"}
+              disabled={disabled}
+              onClick={() => onBackendChange("local_mlx")}
+            >
+              Local
+            </button>
+          )}
           <button
             type="button"
             role="radio"
@@ -112,9 +116,11 @@ export function OptionsBar({
           </button>
         </div>
         <span className="field-hint backend-note">
-          {backend === "local_mlx"
-            ? "Runs MLX Whisper on this Mac. Nothing is uploaded."
-            : "Audio is sent to OpenRouter for transcription (billed per second)."}
+          {!localSupported
+            ? "This platform runs the cloud path only: audio is sent to OpenRouter for transcription (billed per second). Local MLX Whisper is available on macOS."
+            : backend === "local_mlx"
+              ? "Runs MLX Whisper on this Mac. Nothing is uploaded."
+              : "Audio is sent to OpenRouter for transcription (billed per second)."}
         </span>
       </div>
 
@@ -201,9 +207,11 @@ export function OptionsBar({
           {backend === "openrouter" && (
             <option value="cloud">Cloud - native timestamps + MAI anchors when needed</option>
           )}
-          <option value="local_whisperx" disabled={alignmentInstalled === false}>
-            Local WhisperX{alignmentInstalled === false ? " (not installed)" : " (runs on this Mac)"}
-          </option>
+          {localSupported && (
+            <option value="local_whisperx" disabled={alignmentInstalled === false}>
+              Local WhisperX{alignmentInstalled === false ? " (not installed)" : " (runs on this Mac)"}
+            </option>
+          )}
         </select>
         <p className="field-hint">
           {alignmentMode === "cloud" &&
@@ -229,7 +237,9 @@ export function OptionsBar({
           )}
           {alignmentMode === "none" &&
             (backend === "openrouter"
-              ? "Models without their own word timestamps produce no subtitles unless Cloud or Local WhisperX alignment is selected."
+              ? localSupported
+                ? "Models without their own word timestamps produce no subtitles unless Cloud or Local WhisperX alignment is selected."
+                : "Models without their own word timestamps produce no subtitles unless Cloud alignment is selected."
               : "Whisper's own word-level timestamps are used. WhisperX can refine them if needed.")}
         </p>
       </div>

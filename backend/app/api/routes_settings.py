@@ -7,6 +7,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
+from app import capabilities
 from app.api.deps import get_paths, get_settings_store
 from app.api.schemas import OpenRouterKeyRequest
 from app.core.errors import AppError
@@ -62,6 +63,22 @@ def _jsonable_errors(exc: ValidationError) -> list[dict]:
 
 @router.put("")
 async def update_settings(request: Request, patch: dict) -> dict:
+    if (
+        not capabilities.local_transcription_supported()
+        and patch.get("default_provider") == "local_mlx"
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Local transcription (MLX Whisper) is only available on macOS.",
+        )
+    if not capabilities.local_alignment_supported() and (
+        patch.get("default_alignment_mode") == "local_whisperx"
+        or patch.get("default_align_with_whisperx") is True
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Local WhisperX alignment is only available on macOS.",
+        )
     try:
         settings = get_settings_store(request).update(patch)
     except ValidationError as exc:
