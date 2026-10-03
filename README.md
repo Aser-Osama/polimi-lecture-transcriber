@@ -419,3 +419,10 @@ fake provider), `HF_HOME` (model cache override), `PT_OPENROUTER_BASE_URL` (test
 V1 is fully local by design. `docs/vast-provider-plan.md` describes the planned optional
 `VastProvider` (upload only extracted audio, GPU worker lifecycle, same result schema) and why
 the current architecture already supports it without rewriting queue, history or exports.
+
+## Future: per-job chunk parallelism (cloud)
+
+A long lecture is currently bounded by its sequential chunk chain (a 106-minute video is
+22 chunks × 3–5 s at MAI-2 speed). `docs/chunk-parallelism-plan.md` describes the planned
+bounded parallelism (a few chunks in flight per job, ~3–4x faster per lecture) and the
+request-budget rule that keeps provider rate limits safe.
