@@ -102,6 +102,11 @@ class OpenRouterNoKeyError(OpenRouterError):
     user_message = "No OpenRouter API key is configured. Add one in Settings."
 
 
+class OpenRouterPaymentError(OpenRouterError):
+    code = "openrouter_payment_error"
+    user_message = "OpenRouter reports insufficient credits for this account."
+
+
 class AlignmentNotInstalledError(AppError):
     code = "alignment_not_installed"
     user_message = (

@@ -100,11 +100,11 @@ async def test_cloud_alignment_accepted_with_openrouter(client, sine_wav):
 
 async def test_parallel_cloud_settings_validation(client):
     client, _server = client
-    response = await client.put("/api/settings", json={"max_parallel_cloud_jobs": 7})
+    response = await client.put("/api/settings", json={"max_parallel_cloud_jobs": 33})
     assert response.status_code == 422
-    response = await client.put("/api/settings", json={"max_parallel_cloud_jobs": 2})
+    response = await client.put("/api/settings", json={"max_parallel_cloud_jobs": 16})
     assert response.status_code == 200
-    assert response.json()["settings"]["max_parallel_cloud_jobs"] == 2
+    assert response.json()["settings"]["max_parallel_cloud_jobs"] == 16
 
 
 @requires_ffmpeg

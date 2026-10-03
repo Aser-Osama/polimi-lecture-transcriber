@@ -227,7 +227,7 @@ class AppSettings(BaseModel):
     default_openrouter_model: str = "microsoft/mai-transcribe-2"
     default_align_with_whisperx: bool = False
     default_alignment_mode: str = "none"  # none | local_whisperx | cloud
-    max_parallel_cloud_jobs: int = Field(default=3, ge=1, le=6)
+    max_parallel_cloud_jobs: int = Field(default=6, ge=1, le=32)
     glossary: str = ""
     subtitles: SubtitlePreferences = Field(default_factory=SubtitlePreferences)
     keep_temp_uploads: bool = False

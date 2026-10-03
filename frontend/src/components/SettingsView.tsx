@@ -246,11 +246,11 @@ export function SettingsView({
               onChange={(event) =>
                 setDraft({
                   ...draft,
-                  max_parallel_cloud_jobs: Number(event.target.value) || 3,
+                  max_parallel_cloud_jobs: Number(event.target.value) || 6,
                 })
               }
             >
-              {[1, 2, 3, 4, 5, 6].map((count) => (
+              {[1, 2, 3, 4, 6, 8, 10, 12, 16, 20, 24, 32].map((count) => (
                 <option key={count} value={count}>
                   {count}
                 </option>
@@ -258,7 +258,9 @@ export function SettingsView({
             </select>
             <p className="field-hint">
               Jobs that run fully on OpenRouter (no local WhisperX) can run in parallel since
-              they do not use this Mac. Local jobs always run one at a time.
+              they do not use this Mac. Local jobs always run one at a time. Cloud providers
+              rate-limit bursts; the app retries automatically, so 16-32 works best with short
+              lectures and strong connections.
             </p>
           </div>
         </div>

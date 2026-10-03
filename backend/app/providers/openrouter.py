@@ -20,12 +20,16 @@ import base64
 import logging
 import os
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import httpx
 
 from app.core.errors import (
     OpenRouterAuthError,
     OpenRouterError,
     OpenRouterNoKeyError,
+    OpenRouterPaymentError,
 )
 from app.models.result import AlignedWord, RawSegment, RawWord
 from app.providers.base import (
@@ -43,8 +47,37 @@ log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _RETRY_STATUSES = {408, 409, 429, 500, 502, 503, 504}
-_MAX_ATTEMPTS = 3
-_RETRY_BACKOFF = (2.0, 5.0)
+_MAX_ATTEMPTS = 5
+_RETRY_BACKOFF = (2.0, 5.0, 10.0, 15.0)
+# Server-mandated retry delays (Retry-After header / retry_after_seconds) are
+# honored but never exceed this, so a stuck chunk cannot stall a job forever.
+_RETRY_MAX_SLEEP = 20.0
+# Pause before the second pass over chunks that exhausted their retries.
+_CHUNK_RETRY_PAUSE = 5.0
+
+
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    """Backoff for a retryable response, honoring the provider's Retry-After."""
+    delay = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
+    server_delay: float | None = None
+    if response is not None:
+        header = response.headers.get("Retry-After")
+        if header:
+            try:
+                server_delay = float(header)
+            except ValueError:
+                server_delay = None
+        if server_delay is None:
+            try:
+                payload = response.json()
+                server_delay = float(
+                    payload.get("error", {}).get("metadata", {}).get("retry_after_seconds")
+                )
+            except (ValueError, TypeError, AttributeError):
+                server_delay = None
+    if server_delay is not None and server_delay > 0:
+        delay = max(delay, min(server_delay, _RETRY_MAX_SLEEP))
+    return delay
 
 
 def _default_base_url() -> str:
@@ -180,9 +213,8 @@ class OpenRouterProvider(TranscriptionProvider):
                     f"OpenRouter auth failed ({response.status_code}): {response.text[:200]}"
                 )
             if response.status_code == 402:
-                raise OpenRouterError(
-                    f"OpenRouter payment required: {response.text[:200]}",
-                    user_message="OpenRouter reports insufficient credits for this account.",
+                raise OpenRouterPaymentError(
+                    f"OpenRouter payment required: {response.text[:200]}"
                 )
             if response.status_code == 400 and verbose:
                 # Provider cannot do structured output; fall back to plain JSON.
@@ -197,7 +229,7 @@ class OpenRouterProvider(TranscriptionProvider):
                     context_mode=context_mode,
                 )
             if response.status_code in _RETRY_STATUSES and attempt < _MAX_ATTEMPTS - 1:
-                time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)])
+                time.sleep(_retry_delay(response, attempt))
                 continue
             if response.status_code != 200:
                 raise OpenRouterError(
@@ -323,37 +355,79 @@ class OpenRouterProvider(TranscriptionProvider):
 
         def run(client) -> None:
             nonlocal text_only_chunks
-            for position, chunk in enumerate(chunks, start=1):
-                cancel.raise_if_cancelled()
-                use_verbose = self._verbose_supported is not False
-                progress(
-                    "transcribing",
-                    f"Transcribing with {spec.display_name} - chunk {position}/{len(chunks)}",
-                    fraction=(position - 1) / len(chunks),
-                )
-                payload, verbose_ok = self._post_chunk(
-                    client,
-                    spec.model_id,
-                    chunk,
-                    request.language,
-                    api_key,
-                    use_verbose,
-                    context_terms=context_terms,
-                    context_mode=spec.context,
-                )
-                if use_verbose and not verbose_ok:
-                    self._verbose_supported = False
-                elif use_verbose and verbose_ok:
-                    self._verbose_supported = True
+            payloads: dict[int, dict] = {}
+            pending = list(enumerate(chunks, start=1))
+            last_error: OpenRouterError | None = None
+            for pass_number in (1, 2):
+                failures: list[tuple[int, Chunk]] = []
+                for position, chunk in pending:
+                    cancel.raise_if_cancelled()
+                    use_verbose = self._verbose_supported is not False
+                    progress(
+                        "transcribing",
+                        f"Transcribing with {spec.display_name} - chunk {position}/{len(chunks)}",
+                        fraction=(position - 1) / len(chunks),
+                    )
+                    try:
+                        payload, verbose_ok = self._post_chunk(
+                            client,
+                            spec.model_id,
+                            chunk,
+                            request.language,
+                            api_key,
+                            use_verbose,
+                            context_terms=context_terms,
+                            context_mode=spec.context,
+                        )
+                    except (OpenRouterAuthError, OpenRouterPaymentError):
+                        raise
+                    except OpenRouterError as exc:
+                        # A single throttled chunk must not abort a long job:
+                        # remember it and retry after the other chunks finish.
+                        last_error = exc
+                        log.warning(
+                            "Chunk %d/%d failed (pass %d/%d): %s",
+                            position,
+                            len(chunks),
+                            pass_number,
+                            2,
+                            exc,
+                        )
+                        failures.append((position, chunk))
+                        continue
+                    if use_verbose and not verbose_ok:
+                        self._verbose_supported = False
+                    elif use_verbose and verbose_ok:
+                        self._verbose_supported = True
+                    payloads[position] = payload
+                    progress(
+                        "transcribing",
+                        f"Transcribed chunk {position}/{len(chunks)}",
+                        fraction=position / len(chunks),
+                    )
+                    cancel.raise_if_cancelled()
+                if not failures:
+                    pending = []
+                    break
+                pending = failures
+                if pass_number == 1:
+                    progress(
+                        "transcribing",
+                        f"Retrying {len(failures)} rate-limited chunk(s)",
+                        fraction=0.0,
+                    )
+                    time.sleep(_CHUNK_RETRY_PAUSE)
+            if pending:
+                raise last_error or OpenRouterError("Chunks failed after retries")
+
+            # Merge in chunk order so timestamps stay chronological even when
+            # some chunks were completed during the retry pass.
+            for position in sorted(payloads):
+                chunk = chunks[position - 1]
+                payload = payloads[position]
                 if not payload.get("segments") and not payload.get("words"):
                     text_only_chunks += 1
                 self._merge_payload(payload, chunk, segments, words, texts, languages, usage)
-                progress(
-                    "transcribing",
-                    f"Transcribed chunk {position}/{len(chunks)}",
-                    fraction=position / len(chunks),
-                )
-                cancel.raise_if_cancelled()
 
         if self._client is not None:
             run(self._client)

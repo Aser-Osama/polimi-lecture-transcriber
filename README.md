@@ -21,8 +21,8 @@ the OpenRouter backend.
 - **Subtitle alignment with three modes**: none (native timestamps), **Cloud** (word timestamps
   from the chosen OpenRouter model, or a MAI-Transcribe 2 anchor pass when it has none — nothing
   runs on your Mac), or local **WhisperX** forced alignment (Apple-silicon accelerated)
-- **Parallel cloud jobs**: jobs that run fully on OpenRouter execute concurrently (1–6,
-  default 3) since they do not use this Mac; local jobs always run one at a time
+- **Parallel cloud jobs**: jobs that run fully on OpenRouter execute concurrently (1–32,
+  default 6) since they do not use this Mac; local jobs always run one at a time
 - Three quality tiers with real, verified Hugging Face models (downloaded on demand)
 - TXT, SRT, WebVTT and versioned JSON output per job; JSON retains raw Whisper segments,
   word timestamps and final cues so subtitles can be regenerated later
@@ -198,11 +198,29 @@ by OpenRouter; it could be added via a GPU provider (see `docs/vast-provider-pla
 
 ### Parallel cloud jobs
 
-Settings → Defaults → **Parallel cloud jobs** (1–6, default 3). A job counts as cloud-only when
+Settings → Defaults → **Parallel cloud jobs** (1–32, default 6). A job counts as cloud-only when
 its transcription provider is OpenRouter *and* its alignment is not Local WhisperX; those jobs
 each get their own worker and run concurrently. Jobs that touch this Mac (MLX transcription or
 WhisperX) share a single worker and stay strictly sequential, and they can overlap with cloud
 jobs.
+
+The Mac is not the bottleneck for cloud jobs: audio preparation takes ~13 s per 100-minute
+video (FFmpeg extraction + MP3 chunking) and each job uploads only ~29 MB per hour of audio.
+The real limit is the OpenRouter/provider rate limit. Measured on an M5 Pro against real
+lecture recordings:
+
+| Model | Cost | Speed (per request) | 16 parallel | 32 parallel |
+| --- | --- | --- | --- | --- |
+| MAI-Transcribe 2 | ~$0.10/h | 16–40x realtime | clean | rare 429s, auto-retried |
+| Whisper Large V3 | ~$0.043/h | 16–43x realtime | clean | clean |
+| Whisper Large V3 Turbo | ~$0.012/h | 13–24x realtime | clean | clean |
+| Qwen3 ASR 1.7B | ~$0.027/h | 30–53x realtime | clean | clean |
+| Qwen3 ASR Flash | ~$0.126/h | 9–13x realtime | clean | clean |
+
+16–32 concurrent jobs are realistic for a batch (e.g. 60 h of lectures ≈ 15–25 min total at
+16-way). The client honors provider `Retry-After` hints and retries up to 5 times, so brief
+rate limits do not fail jobs. Budget examples for 60 h: Turbo ≈ $0.75, Qwen 1.7B ≈ $1.60,
+Whisper V3 ≈ $2.60, MAI-2 ≈ $6.
 
 ## WhisperX alignment (optional)
 

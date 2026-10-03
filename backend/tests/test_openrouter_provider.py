@@ -7,7 +7,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.core.errors import CancelledError, OpenRouterAuthError, OpenRouterNoKeyError
+from app.core.errors import (
+    CancelledError,
+    OpenRouterAuthError,
+    OpenRouterError,
+    OpenRouterNoKeyError,
+)
 from app.models.result import RawWord
 from app.providers.base import CancellationToken, TranscriptionRequest
 from app.providers.openrouter import OpenRouterProvider, segments_from_words
@@ -159,7 +164,7 @@ def test_auth_error_is_explicit(with_key, sine_wav):
 @requires_ffmpeg
 def test_retries_on_rate_limit(with_key, sine_wav, monkeypatch):
     monkeypatch.setattr("app.providers.openrouter._RETRY_BACKOFF", (0.01, 0.01))
-    statuses = [429, 429, 200]
+    statuses = [429, 429, 429, 429, 200]
 
     def handler(request: httpx.Request) -> httpx.Response:
         status = statuses.pop(0)
@@ -172,6 +177,22 @@ def test_retries_on_rate_limit(with_key, sine_wav, monkeypatch):
     result = provider.transcribe_sync(request_for(sine_wav), noop, CancellationToken())
     assert result.meta["chunks"] == 1
     assert statuses == []
+
+
+def test_retry_delay_honors_server_hints():
+    from app.providers.openrouter import _retry_delay
+
+    plain = httpx.Response(429, json={"error": {"message": "rate limited"}})
+    assert _retry_delay(plain, 0) == 2.0
+    assert _retry_delay(None, 3) == 15.0
+
+    header = httpx.Response(429, headers={"Retry-After": "7"}, json={})
+    assert _retry_delay(header, 0) == 7.0
+
+    metadata = httpx.Response(429, json={"error": {"metadata": {"retry_after_seconds": 3}}})
+    assert _retry_delay(metadata, 1) == 5.0  # backoff already larger
+    huge = httpx.Response(429, json={"error": {"metadata": {"retry_after_seconds": 60}}})
+    assert _retry_delay(huge, 0) == 20.0  # capped
 
 
 @requires_ffmpeg
@@ -206,3 +227,54 @@ def test_segments_from_words_groups_on_pauses_and_sentences():
     assert len(segments) == 2
     assert segments[0].text == "Hello world."
     assert segments[1].start == 2.5
+
+
+@requires_ffmpeg
+def test_throttled_chunk_is_retried_after_the_rest(with_key, sine_wav, monkeypatch):
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "TARGET_CHUNK_SECONDS", 2.0)
+    monkeypatch.setattr(chunking, "MAX_CHUNK_SECONDS", 3.0)
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.4)
+    monkeypatch.setattr("app.providers.openrouter._RETRY_BACKOFF", (0.01,))
+    monkeypatch.setattr("app.providers.openrouter._CHUNK_RETRY_PAUSE", 0.01)
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] <= 5:
+            # Chunk 1 exhausts all five attempts during the first pass.
+            return httpx.Response(429, json={"error": {"message": "rate limited"}})
+        return httpx.Response(200, json=words_payload(0.0))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    result = provider.transcribe_sync(request_for(sine_wav), noop, CancellationToken())
+
+    assert result.meta["chunks"] == 3
+    assert calls["n"] == 8  # 5 failed attempts + 2 other chunks + retried chunk 1
+    assert len(result.segments) == 6
+
+
+@requires_ffmpeg
+def test_persistent_throttling_fails_after_both_passes(with_key, sine_wav, monkeypatch):
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "TARGET_CHUNK_SECONDS", 2.0)
+    monkeypatch.setattr(chunking, "MAX_CHUNK_SECONDS", 3.0)
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.4)
+    monkeypatch.setattr("app.providers.openrouter._RETRY_BACKOFF", (0.01,))
+    monkeypatch.setattr("app.providers.openrouter._CHUNK_RETRY_PAUSE", 0.01)
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429, json={"error": {"message": "rate limited"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    with pytest.raises(OpenRouterError):
+        provider.transcribe_sync(request_for(sine_wav), noop, CancellationToken())
+    assert calls["n"] == 30  # 3 chunks x 5 attempts x 2 passes

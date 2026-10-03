@@ -292,7 +292,11 @@ async def test_idle_worker_exits_and_releases_memory(paths, sine_wav, monkeypatc
             timeout=15,
             what="idle worker shutdown",
         )
-        assert environment.handles[0].is_alive() is False
+        await wait_until(
+            lambda: environment.handles[0].is_alive() is False,
+            timeout=15,
+            what="idle worker process exit",
+        )
         # A new job is processed by a fresh worker.
         second = make_job(paths, sine_wav)
         await environment.manager.enqueue(second)
