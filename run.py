@@ -102,7 +102,7 @@ def ensure_venv() -> Path:
 
 def dependencies_ok(python: Path) -> bool:
     probe = subprocess.run(
-        [str(python), "-c", "import fastapi, uvicorn, app"],
+        [str(python), "-c", "import fastapi, uvicorn, numpy, app"],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
