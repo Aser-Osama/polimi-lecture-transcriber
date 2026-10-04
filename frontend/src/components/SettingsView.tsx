@@ -263,6 +263,54 @@ export function SettingsView({
               lectures and strong connections.
             </p>
           </div>
+          <div className="field">
+            <label htmlFor="chunk-parallelism">Chunks per job</label>
+            <select
+              id="chunk-parallelism"
+              value={draft.chunk_parallelism}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  chunk_parallelism: Number(event.target.value) || 8,
+                })
+              }
+            >
+              {[1, 2, 3, 4, 5, 6, 8].map((count) => (
+                <option key={count} value={count}>
+                  {count}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">
+              A long lecture is split into silence-aligned chunks that normally upload one after
+              another. Sending several in parallel makes a single lecture finish about 2.5x
+              faster (measured with 8); the app retries rate-limited requests automatically.
+            </p>
+          </div>
+          <div className="field">
+            <label htmlFor="chunk-seconds">Chunk length</label>
+            <select
+              id="chunk-seconds"
+              value={draft.chunk_seconds}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  chunk_seconds: Number(event.target.value) || 300,
+                })
+              }
+            >
+              {[300, 600, 900, 1200].map((seconds) => (
+                <option key={seconds} value={seconds}>
+                  {seconds / 60} minutes
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">
+              Longer chunks mean fewer requests and slightly faster lectures. 10-20 minutes is
+              safe with MAI-Transcribe 2 (20 minutes processes in ~13 s); slower models can hit
+              OpenRouter's ~60 s per-request timeout, so keep 5 minutes for those.
+            </p>
+          </div>
         </div>
       </section>
 

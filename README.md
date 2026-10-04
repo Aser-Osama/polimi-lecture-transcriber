@@ -198,11 +198,25 @@ by OpenRouter; it could be added via a GPU provider (see `docs/vast-provider-pla
 
 ### Parallel cloud jobs
 
-Settings → Defaults → **Parallel cloud jobs** (1–32, default 6). A job counts as cloud-only when
-its transcription provider is OpenRouter *and* its alignment is not Local WhisperX; those jobs
-each get their own worker and run concurrently. Jobs that touch this Mac (MLX transcription or
-WhisperX) share a single worker and stay strictly sequential, and they can overlap with cloud
-jobs.
+Settings → Defaults → **Parallel cloud jobs** (1–32, default 6), **Chunks per job** (1–8,
+default 8) and **Chunk length** (5/10/15/20 minutes, default 5). A job counts as cloud-only
+when its transcription provider is OpenRouter *and* its alignment is not Local WhisperX; those
+jobs each get their own worker and run concurrently. Jobs that touch this Mac (MLX
+transcription or WhisperX) share a single worker and stay strictly sequential, and they can
+overlap with cloud jobs.
+
+A long lecture is split into silence-aligned chunks; **Chunks per job** sends several of them
+at once so a single recording finishes sooner instead of waiting for its sequential chunk
+chain. Measured on a real 106-minute lecture with MAI-Transcribe 2: **138 s sequential → 58 s
+at 4 → 51 s at 8 chunks**, identical cost and transcript quality (~99.9% agreement).
+Provider rate limits are absorbed by automatic retries (Retry-After aware, plus a second pass
+over throttled chunks).
+
+OpenRouter's real constraint is a ~60-second *processing* timeout per request, not an audio
+length limit — 20-minute chunks complete fine with MAI-2 (13 s). **Chunk length** trades fewer
+requests against that timeout: 10–20 minutes is safe for MAI-2, while slower models should
+stay at 5. Provider routing controls (`order`/`sort`) are not applied to OpenRouter's
+transcription endpoint, so chunking + parallelism is the only speed lever.
 
 The Mac is not the bottleneck for cloud jobs: audio preparation takes ~13 s per 100-minute
 video (FFmpeg extraction + MP3 chunking) and each job uploads only ~29 MB per hour of audio.

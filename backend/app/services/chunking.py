@@ -169,11 +169,16 @@ def prepare_chunks(
     cancel: CancellationToken | None = None,
     on_progress: Callable[[float], None] | None = None,
     reuse_existing: bool = False,
+    target_seconds: float | None = None,
 ) -> list[Chunk]:
     """Detect silences, plan boundaries and encode every chunk to MP3.
 
     ``reuse_existing`` skips re-encoding when the chunk file already exists,
     which makes a second pass (e.g. cloud anchor alignment) nearly free.
+    ``target_seconds`` overrides the default ~5-minute target (the max is
+    derived as 1.2x the target) — longer chunks mean fewer requests, which is
+    safe for fast models like MAI-Transcribe 2 but risks the 60 s upstream
+    timeout on slower ones.
     """
     from app.config import debug_mode
 
@@ -182,14 +187,16 @@ def prepare_chunks(
             "Cannot chunk audio without a known duration",
             user_message="The media duration is unknown, so it cannot be uploaded.",
         )
+    target = float(target_seconds) if target_seconds and target_seconds > 0 else TARGET_CHUNK_SECONDS
+    max_len = target * (MAX_CHUNK_SECONDS / TARGET_CHUNK_SECONDS)
     silences = detect_silences(audio_path)
     if cancel is not None:
         cancel.raise_if_cancelled()
     bounds = plan_bounds(
         duration,
         silences,
-        target=TARGET_CHUNK_SECONDS,
-        max_len=MAX_CHUNK_SECONDS,
+        target=target,
+        max_len=max_len,
         window=CUT_SEARCH_WINDOW,
     )
     log.info("Planned %d chunk(s) for %.0fs audio", len(bounds), duration)

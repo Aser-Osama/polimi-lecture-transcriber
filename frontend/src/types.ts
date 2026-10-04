@@ -143,6 +143,8 @@ export interface AppSettings {
   default_align_with_whisperx: boolean;
   default_alignment_mode: AlignmentMode;
   max_parallel_cloud_jobs: number;
+  chunk_parallelism: number;
+  chunk_seconds: number;
   glossary: string;
   subtitles: SubtitlePreferences;
   keep_temp_uploads: boolean;

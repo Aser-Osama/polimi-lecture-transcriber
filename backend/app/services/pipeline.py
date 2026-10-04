@@ -157,6 +157,8 @@ def run_pipeline(ctx: PipelineContext) -> PipelineOutcome:
     initial_prompt = build_initial_prompt_from_terms(context_terms)
 
     options = {**ctx.provider_options, **job.config.options}
+    options.setdefault("chunk_parallelism", ctx.settings.chunk_parallelism)
+    options.setdefault("chunk_seconds", ctx.settings.chunk_seconds)
     if media_duration:
         options.setdefault("fake_media_duration", media_duration)
     request = TranscriptionRequest(

@@ -215,6 +215,100 @@ def test_cancellation_between_chunks(with_key, sine_wav, monkeypatch):
         provider.transcribe_sync(request_for(sine_wav, duration=6.0), noop, token)
 
 
+@requires_ffmpeg
+def test_chunks_run_in_parallel_when_configured(with_key, sine_wav, monkeypatch):
+    import threading
+    import time as time_module
+
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "TARGET_CHUNK_SECONDS", 2.0)
+    monkeypatch.setattr(chunking, "MAX_CHUNK_SECONDS", 3.0)
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.4)
+
+    state = {"active": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time_module.sleep(0.15)
+        with lock:
+            state["active"] -= 1
+        return httpx.Response(200, json=words_payload(0.0))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    result = provider.transcribe_sync(
+        request_for(sine_wav, chunk_parallelism=3), noop, CancellationToken()
+    )
+
+    assert result.meta["chunks"] == 3
+    assert state["peak"] >= 2, f"expected overlapping chunk requests, peak={state['peak']}"
+    assert len(result.segments) == 6
+
+
+@requires_ffmpeg
+def test_chunk_parallelism_can_be_disabled(with_key, sine_wav, monkeypatch):
+    import threading
+    import time as time_module
+
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "TARGET_CHUNK_SECONDS", 2.0)
+    monkeypatch.setattr(chunking, "MAX_CHUNK_SECONDS", 3.0)
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.4)
+
+    state = {"active": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time_module.sleep(0.05)
+        with lock:
+            state["active"] -= 1
+        return httpx.Response(200, json=words_payload(0.0))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+    result = provider.transcribe_sync(
+        request_for(sine_wav, chunk_parallelism=1), noop, CancellationToken()
+    )
+
+    assert result.meta["chunks"] == 3
+    assert state["peak"] == 1
+    assert len(result.segments) == 6
+
+
+def test_chunk_seconds_option_changes_chunk_count(with_key, sine_wav, monkeypatch):
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.4)
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json=words_payload(0.0))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenRouterProvider(base_url="http://mock", http_client=client)
+
+    default_result = provider.transcribe_sync(
+        request_for(sine_wav), noop, CancellationToken()
+    )
+    assert default_result.meta["chunks"] == 1
+
+    short_result = provider.transcribe_sync(
+        request_for(sine_wav, chunk_seconds=2), noop, CancellationToken()
+    )
+    assert short_result.meta["chunks"] >= 2
+    assert calls["n"] == 1 + short_result.meta["chunks"]
+
+
 def test_segments_from_words_groups_on_pauses_and_sentences():
     words = [
         RawWord(text="Hello", start=0.0, end=0.4),

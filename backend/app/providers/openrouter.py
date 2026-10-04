@@ -19,7 +19,9 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,6 +56,8 @@ _RETRY_BACKOFF = (2.0, 5.0, 10.0, 15.0)
 _RETRY_MAX_SLEEP = 20.0
 # Pause before the second pass over chunks that exhausted their retries.
 _CHUNK_RETRY_PAUSE = 5.0
+# Upper bound for chunks processed concurrently inside one job.
+_MAX_CHUNK_PARALLELISM = 8
 
 
 def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
@@ -317,6 +321,13 @@ class OpenRouterProvider(TranscriptionProvider):
         def on_chunk_prep(fraction: float) -> None:
             progress("transcribing", f"Preparing chunks for upload ({fraction * 100:.0f}%)")
 
+        chunk_seconds = 0.0
+        raw_seconds = (request.options or {}).get("chunk_seconds", 0)
+        try:
+            chunk_seconds = float(raw_seconds)
+        except (TypeError, ValueError):
+            chunk_seconds = 0.0
+
         chunks = prepare_chunks(
             request.audio_path,
             work_dir,
@@ -324,6 +335,7 @@ class OpenRouterProvider(TranscriptionProvider):
             cancel=cancel,
             on_progress=on_chunk_prep,
             reuse_existing=bool(request.options.get("reuse_existing_chunks")),
+            target_seconds=chunk_seconds if chunk_seconds > 0 else None,
         )
         cancel.raise_if_cancelled()
         log.info(
@@ -356,56 +368,120 @@ class OpenRouterProvider(TranscriptionProvider):
         def run(client) -> None:
             nonlocal text_only_chunks
             payloads: dict[int, dict] = {}
-            pending = list(enumerate(chunks, start=1))
             last_error: OpenRouterError | None = None
-            for pass_number in (1, 2):
-                failures: list[tuple[int, Chunk]] = []
-                for position, chunk in pending:
-                    cancel.raise_if_cancelled()
-                    use_verbose = self._verbose_supported is not False
-                    progress(
-                        "transcribing",
-                        f"Transcribing with {spec.display_name} - chunk {position}/{len(chunks)}",
-                        fraction=(position - 1) / len(chunks),
-                    )
-                    try:
-                        payload, verbose_ok = self._post_chunk(
-                            client,
-                            spec.model_id,
-                            chunk,
-                            request.language,
-                            api_key,
-                            use_verbose,
-                            context_terms=context_terms,
-                            context_mode=spec.context,
-                        )
-                    except (OpenRouterAuthError, OpenRouterPaymentError):
-                        raise
-                    except OpenRouterError as exc:
-                        # A single throttled chunk must not abort a long job:
-                        # remember it and retry after the other chunks finish.
-                        last_error = exc
-                        log.warning(
-                            "Chunk %d/%d failed (pass %d/%d): %s",
-                            position,
-                            len(chunks),
-                            pass_number,
-                            2,
-                            exc,
-                        )
-                        failures.append((position, chunk))
-                        continue
+            concurrency = 1
+            raw_concurrency = (request.options or {}).get("chunk_parallelism", 1)
+            try:
+                concurrency = int(raw_concurrency)
+            except (TypeError, ValueError):
+                concurrency = 1
+            concurrency = max(1, min(concurrency, _MAX_CHUNK_PARALLELISM, len(chunks)))
+            state_lock = threading.Lock()
+            completed = 0
+
+            def process(position: int, chunk: Chunk, use_verbose: bool) -> tuple[dict, bool]:
+                return self._post_chunk(
+                    client,
+                    spec.model_id,
+                    chunk,
+                    request.language,
+                    api_key,
+                    use_verbose,
+                    context_terms=context_terms,
+                    context_mode=spec.context,
+                )
+
+            def report(position: int, use_verbose: bool, verbose_ok: bool, payload: dict) -> None:
+                nonlocal completed
+                with state_lock:
                     if use_verbose and not verbose_ok:
                         self._verbose_supported = False
                     elif use_verbose and verbose_ok:
                         self._verbose_supported = True
                     payloads[position] = payload
+                    completed += 1
+                    done = completed
+                progress(
+                    "transcribing",
+                    f"Transcribed {done}/{len(chunks)} chunk(s)",
+                    fraction=done / len(chunks),
+                )
+
+            def failure(position: int, chunk: Chunk, pass_number: int, exc: OpenRouterError):
+                nonlocal last_error
+                last_error = exc
+                log.warning(
+                    "Chunk %d/%d failed (pass %d/%d): %s",
+                    position,
+                    len(chunks),
+                    pass_number,
+                    2,
+                    exc,
+                )
+                return (position, chunk)
+
+            pending = list(enumerate(chunks, start=1))
+            for pass_number in (1, 2):
+                failures: list[tuple[int, Chunk]] = []
+                if pending:
+                    # Settle the verbose/plain format on the first chunk before
+                    # fanning out so parallel threads never race on the flag.
+                    first_position, first_chunk = pending[0]
+                    cancel.raise_if_cancelled()
+                    use_verbose = self._verbose_supported is not False
                     progress(
                         "transcribing",
-                        f"Transcribed chunk {position}/{len(chunks)}",
-                        fraction=position / len(chunks),
+                        f"Transcribing with {spec.display_name} - {len(chunks)} chunk(s)"
+                        + (f", up to {concurrency} in parallel" if concurrency > 1 else ""),
+                        fraction=completed / len(chunks),
                     )
-                    cancel.raise_if_cancelled()
+                    try:
+                        payload, verbose_ok = process(first_position, first_chunk, use_verbose)
+                    except (OpenRouterAuthError, OpenRouterPaymentError):
+                        raise
+                    except OpenRouterError as exc:
+                        failures.append(failure(first_position, first_chunk, pass_number, exc))
+                    else:
+                        report(first_position, use_verbose, verbose_ok, payload)
+                    rest = pending[1:]
+                else:
+                    rest = []
+
+                if rest and concurrency > 1:
+                    pool_verbose = self._verbose_supported is not False
+                    with ThreadPoolExecutor(
+                        max_workers=concurrency, thread_name_prefix="chunk"
+                    ) as pool:
+                        futures = {}
+                        for position, chunk in rest:
+                            cancel.raise_if_cancelled()
+                            futures[pool.submit(process, position, chunk, pool_verbose)] = (
+                                position,
+                                chunk,
+                            )
+                        for future in as_completed(futures):
+                            position, chunk = futures[future]
+                            try:
+                                payload, verbose_ok = future.result()
+                            except (OpenRouterAuthError, OpenRouterPaymentError):
+                                raise
+                            except OpenRouterError as exc:
+                                failures.append(failure(position, chunk, pass_number, exc))
+                            else:
+                                report(position, pool_verbose, verbose_ok, payload)
+                else:
+                    for position, chunk in rest:
+                        cancel.raise_if_cancelled()
+                        use_verbose = self._verbose_supported is not False
+                        try:
+                            payload, verbose_ok = process(position, chunk, use_verbose)
+                        except (OpenRouterAuthError, OpenRouterPaymentError):
+                            raise
+                        except OpenRouterError as exc:
+                            failures.append(failure(position, chunk, pass_number, exc))
+                        else:
+                            report(position, use_verbose, verbose_ok, payload)
+
                 if not failures:
                     pending = []
                     break
@@ -414,7 +490,7 @@ class OpenRouterProvider(TranscriptionProvider):
                     progress(
                         "transcribing",
                         f"Retrying {len(failures)} rate-limited chunk(s)",
-                        fraction=0.0,
+                        fraction=completed / len(chunks),
                     )
                     time.sleep(_CHUNK_RETRY_PAUSE)
             if pending:

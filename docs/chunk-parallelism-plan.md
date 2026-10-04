@@ -1,9 +1,21 @@
-# Future plan: per-job chunk parallelism (cloud)
+# Per-job chunk parallelism (cloud)
 
-Status: **not implemented**. Today each OpenRouter job sends its audio chunks one at a time
-(`OpenRouterProvider.transcribe_sync`), so a single long lecture is bounded by its sequential
-chunk chain. This document describes the planned bounded-parallelism change so it can be added
-without touching the queue, exports or UI contracts.
+Status: **implemented**. Setting: *Settings → Defaults → Chunks per job* (1–8, default 4),
+stored as `AppSettings.chunk_parallelism` and passed to the provider as
+`options["chunk_parallelism"]`; the provider clamps it to 1–8 and to the number of chunks.
+
+Measured on a real 106-minute lecture (MAI-Transcribe 2, ~22 chunks): 138 s sequential →
+60 s at 4 chunks (~2.2x), identical cost; a 62-minute lecture went 77 s → 31 s. The
+provider-side design below is kept as documentation of how it works; the global
+request-budget rule was not needed because retries (5 attempts + `Retry-After` + second
+pass) absorb provider throttling in practice.
+
+Chunk size note: OpenRouter's documented limit is a ~60-second *processing* timeout per
+request, not an audio-length cap. 20-minute chunks complete fine with MAI-2 (13 s) and
+Whisper V3 (10 s); the 5-minute default stays safe across slower models and providers, and
+the constants in `backend/app/services/chunking.py` can be raised if desired.
+
+Original design notes follow.
 
 ## Why it matters (measured, M5 Pro + MAI-Transcribe 2)
 

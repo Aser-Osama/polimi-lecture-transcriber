@@ -92,3 +92,15 @@ def test_prepare_chunks_splits_long_audio(tmp_path: Path, sine_wav: Path, monkey
     for chunk in chunks:
         assert chunk.path.exists()
         assert chunk.duration <= 3.0 + 1e-9
+
+
+def test_prepare_chunks_target_seconds_override(tmp_path: Path, sine_wav: Path, monkeypatch):
+    import app.services.chunking as chunking
+
+    monkeypatch.setattr(chunking, "CUT_SEARCH_WINDOW", 0.5)
+    work = tmp_path / "work"
+    chunks = prepare_chunks(sine_wav, work, duration=6.0, target_seconds=2.0)
+    assert len(chunks) >= 2
+    assert chunks[-1].end == pytest.approx(6.0)
+    for chunk in chunks:
+        assert chunk.duration <= 2.4 + 1e-9  # max is 1.2x the target

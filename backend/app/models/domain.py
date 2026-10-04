@@ -228,6 +228,10 @@ class AppSettings(BaseModel):
     default_align_with_whisperx: bool = False
     default_alignment_mode: str = "none"  # none | local_whisperx | cloud
     max_parallel_cloud_jobs: int = Field(default=6, ge=1, le=32)
+    # Chunks processed concurrently inside one cloud job (long lectures).
+    chunk_parallelism: int = Field(default=8, ge=1, le=8)
+    # Target chunk length in seconds for cloud uploads (5-20 minutes).
+    chunk_seconds: int = Field(default=300, ge=300, le=1200)
     glossary: str = ""
     subtitles: SubtitlePreferences = Field(default_factory=SubtitlePreferences)
     keep_temp_uploads: bool = False

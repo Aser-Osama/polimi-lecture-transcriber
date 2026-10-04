@@ -107,6 +107,20 @@ async def test_parallel_cloud_settings_validation(client):
     assert response.json()["settings"]["max_parallel_cloud_jobs"] == 16
 
 
+async def test_chunk_parallelism_settings_validation(client):
+    client, _server = client
+    response = await client.put("/api/settings", json={"chunk_parallelism": 9})
+    assert response.status_code == 422
+    response = await client.put("/api/settings", json={"chunk_parallelism": 6})
+    assert response.status_code == 200
+    assert response.json()["settings"]["chunk_parallelism"] == 6
+    response = await client.put("/api/settings", json={"chunk_seconds": 120})
+    assert response.status_code == 422
+    response = await client.put("/api/settings", json={"chunk_seconds": 600})
+    assert response.status_code == 200
+    assert response.json()["settings"]["chunk_seconds"] == 600
+
+
 @requires_ffmpeg
 async def test_two_cloud_jobs_transcribe_concurrently(client, sine_wav):
     client, server = client
